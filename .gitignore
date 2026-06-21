@@ -1,0 +1,28 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Segredos / ambiente
+.env
+*.local
+
+# Dados / logs / DB
+data/
+*.db
+*.log
+
+# SO / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Marcador do hook de memória (não versionar)
+.claude/.last-stop-signature
