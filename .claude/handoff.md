@@ -14,8 +14,9 @@ Arquitetura travada e CONFIRMADA na prática (ver `.claude/decisions.md`): CPAPI
 **Login do gateway** foi o grande atrito — destravou com: restart limpo do gateway + login em aba anônima + sem sessão concorrente (mobile/web deslogados). A build de 2023 do launcher NÃO era o problema (serverVersion runtime = 10.46.1l Jun/2026). Receita completa na memória global `ibkr-gateway-login`. Detalhe: nesta máquina a PAPER não conecta (ssodh 500), mas a conta REAL conecta — usar a real.
 O `.env` está apontando p/ a conta real com `TRADING_MODE=live`, mas `TRADING_ALLOW_LIVE=false` e `TRADING_DRY_RUN=true` → leitura segura, nenhuma ordem real dispara.
 
-## Próximo passo concreto
-Quando o usuário quiser: (1) registrar o MCP no Claude Code (`claude mcp add ibkr -- <abs>/.venv/Scripts/python.exe -m ibkr_agent.server.app`) e exercitar as tools de leitura pelo agente; (2) com mercado ABERTO, testar uma ordem real fracionária pequena (cashQty US$1-2) p/ mapear quais warnings de reply (messageIds) aparecem e ajustar a allow-list em `broker.py` (hoje só `o354`); (3) a skill `/invest` em si (prompt de decisão) é tarefa do usuário. Depois: tickle em background + alerta de reautenticação.
+## Próximo passo concreto (AMANHÃ, mercado aberto)
+O MCP `ibkr` JÁ está registrado no Claude Code (escopo local, status Connected). **As tools só aparecem numa SESSÃO NOVA** — então amanhã, ao abrir o projeto, eu já terei `session_status/market_status/get_quote/account_summary/positions/buy/sell/cancel_order/open_orders`.
+Roteiro: (0) subir o gateway e logar (aba anônima, conta real) — ver memória `ibkr-gateway-login`; (1) numa sessão nova, rodar as tools de LEITURA pelo agente p/ confirmar; (2) com mercado ABERTO, testar uma ordem real fracionária mínima (cashQty US$1-2) — isso vai disparar warnings de reply; capturar os `messageIds` e adicionar os benignos à allow-list em `broker.py` (hoje só `o354`); lembrar que `.env` está com dry_run=true e allow_live=false → p/ ordem real de teste, ajustar conscientemente. (3) A skill `/invest` (prompt de decisão) é tarefa do usuário. Depois: tickle em background + alerta de reautenticação.
 
 ## Em aberto / armadilhas
 - Sessão da live expira (~ horas) e cai na manutenção ~01:00 ET; precisa relogar (sem OAuth p/ varejo). Plano: monitor de reauth.

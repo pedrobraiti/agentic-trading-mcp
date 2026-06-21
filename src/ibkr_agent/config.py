@@ -4,15 +4,20 @@ from __future__ import annotations
 
 from decimal import Decimal
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .domain.models import TradingMode
 
+# Caminho absoluto do .env na raiz do projeto, para o servidor achá-lo independente do
+# diretório de onde for iniciado (ex.: quando o Claude Code lança o MCP).
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=str(_ENV_FILE), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
 
     # Conexão CPAPI
