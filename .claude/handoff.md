@@ -4,29 +4,31 @@
 > de forma relativamente detalhada. É o PRIMEIRO arquivo que a próxima sessão lê.
 > Mantenha-o vivo e específico — detalhado o bastante para retomar sem reconstruir o raciocínio.
 
-**Última atualização:** 2026-06-21 (setup inicial)
+**Última atualização:** 2026-06-21 (scaffold + domínio prontos)
 
 ## Onde parei
-Acabei de rodar o `/setup`: criei a estrutura `.claude/` (context, decisions, todo, handoff), `CLAUDE.md`, `README.md`, configs de git (`.gitignore`, `.gitattributes`, `.editorconfig`), inicializei o git, fiz o commit inicial e criei o repositório PÚBLICO no GitHub `mcp-ibkr-agent`. Nenhum código de aplicação foi escrito ainda.
+Setup feito e repo público no ar (`pedrobraiti/mcp-ibkr-agent`). Scaffold montado:
+- `.venv` com Python 3.12.10, `pyproject.toml` (deps: mcp, httpx, pydantic, pydantic-settings, python-dotenv; dev: pytest, pytest-asyncio, ruff, respx).
+- Estrutura hexagonal em `src/ibkr_agent/`: `domain/`, `adapters/`, `safety/`, `server/`.
+- **Domínio pronto:** `domain/models.py` (OrderRequest com regra "exatamente um entre quantity e cash_qty", Quote, Position, AccountSummary, OrderResult, enums) e `domain/ports.py` (BrokerPort, MarketDataPort, AuthPort como Protocols async).
+- `tests/test_order_request.py` — 5 testes passando.
+Tudo commitado.
 
 ## Contexto mental
-Arquitetura já está 100% travada após pesquisa (ver `.claude/decisions.md`):
-- **CPAPI (Client Portal API REST), não TWS/ib_async** — porque fracionário de ação só funciona oficialmente via CPAPI com o campo `cashQty` (ordem por valor em US$).
-- **Hexagonal (ports & adapters):** BrokerPort, MarketDataPort, AuthPort; tudo sobre CPAPI agora, ib_async fica como adapter de dados futuro opcional.
-- **Auth:** OAuth headless é o alvo, mas com fallback de Gateway (login manual) porque OAuth retail pode exigir liberação da IBKR.
-- **Segurança:** paper primeiro (conta `U24235856`), live atrás de flag + dry-run + confirmação + limite.
-- Reaproveitar `services/ib_service.py` do quick_invest como referência (já é CPAPI), mas reescrever limpo.
+Arquitetura travada (ver `.claude/decisions.md`): CPAPI + cashQty, hexagonal, OAuth-alvo/Gateway-fallback, paper+trava live. O domínio é puro e não depende da API. O próximo bloco (adapter CPAPI) depende de detalhes concretos da API da IBKR que eu NÃO quero chutar — por isso mandei ao usuário um prompt de pesquisa (canal de pesquisa profunda, ver CLAUDE.md) cobrindo: payload exato do POST de ordem com cashQty, fluxo de reply de confirmação de ordem da CPAPI, mecânica de sessão/keep-alive `/tickle` e auth do Gateway, e o "aquecimento" do snapshot de market data.
 
 ## Próximo passo concreto
-Montar o scaffold: criar `.venv` (Python 3.12+), `pyproject.toml`/`requirements.txt`, e a árvore de pastas hexagonal (`domain/`, `adapters/`, `mcp/`, `tests/`). Antes, vale conferir a doc viva da CPAPI (formato exato do corpo da ordem com `cashQty` e o fluxo de auth do Gateway) — se precisar de pesquisa profunda, mandar prompt para o usuário levar à IA de pesquisa (ver CLAUDE.md).
+Quando o relatório de pesquisa da CPAPI chegar: implementar `adapters/cpapi/` (client httpx async) satisfazendo os três ports, começando por AuthPort (Gateway + /tickle) e MarketDataPort (resolve_conid, get_quote, get_account_summary, get_positions), depois BrokerPort (place_order com quantity|cashQty + tratamento do reply de confirmação, cancel_order, get_live_orders). Enquanto o relatório não chega, dá p/ adiantar a camada `safety/` (paper/live, dry-run, limite MAX_ORDER_VALUE) e o esqueleto do `server/` MCP com um adapter fake p/ testar as tools.
 
 ## Em aberto / armadilhas
-- Confirmar disponibilidade do OAuth para conta varejo pessoal na IBKR (pode bloquear o headless puro → por isso o fallback Gateway).
-- Validar empiricamente no paper se a permissão "Trade in Fractions" espelha da live e se `cashQty` funciona na conta paper.
-- CPAPI exige o Client Portal Gateway rodando localmente (Java) + sessão logada; a market data snapshot às vezes vem vazia na 1ª chamada (precisa "aquecer"/repetir).
-- `.env` real do quick_invest tem segredos — NÃO copiar para este repo público; só espelhar chaves no `.env.example`.
+- Detalhes da CPAPI a confirmar via pesquisa (acima) — não implementar o adapter no chute.
+- OAuth retail pode exigir liberação da IBKR → manter Gateway como fallback.
+- Validar no paper se "Trade in Fractions" espelha da live e se cashQty funciona em paper.
+- Snapshot de market data da CPAPI costuma vir vazio na 1ª chamada (aquecer/repetir).
+- Repo PÚBLICO: nunca commitar segredo; só `.env.example` sem valores. Credenciais reais ficam no `.env` local (gitignored), reaproveitadas do quick_invest.
 
 ## Como retomar rápido
-- Ler `.claude/decisions.md` para o "porquê" de cada escolha.
-- Referência de código CPAPI: `G:\Meu Drive\vscode\quick_invest\services\ib_service.py`.
-- Repo: GitHub `pedrobraiti/mcp-ibkr-agent` (público).
+- Ler `.claude/decisions.md` (porquês) e `.claude/todo.md` (plano).
+- Rodar testes: `.venv/Scripts/python.exe -m pytest -q`.
+- Referência de código CPAPI (a reescrever limpo): `G:\Meu Drive\vscode\quick_invest\services\ib_service.py`.
+- Ativar venv (Windows/PowerShell): `& ".venv\Scripts\Activate.ps1"` (se erro de policy: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`).
