@@ -8,27 +8,27 @@ dólar, que habilita fracionário via CPAPI) — nunca os dois ao mesmo tempo.
 from __future__ import annotations
 
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field, model_validator
 
 
-class OrderSide(str, Enum):
+class OrderSide(StrEnum):
     BUY = "BUY"
     SELL = "SELL"
 
 
-class OrderType(str, Enum):
+class OrderType(StrEnum):
     MARKET = "MKT"
     LIMIT = "LMT"
 
 
-class TradingMode(str, Enum):
+class TradingMode(StrEnum):
     PAPER = "paper"
     LIVE = "live"
 
 
-class OrderStatus(str, Enum):
+class OrderStatus(StrEnum):
     SUBMITTED = "submitted"
     FILLED = "filled"
     CANCELLED = "cancelled"
