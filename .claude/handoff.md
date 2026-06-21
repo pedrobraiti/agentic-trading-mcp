@@ -4,34 +4,30 @@
 > de forma relativamente detalhada. É o PRIMEIRO arquivo que a próxima sessão lê.
 > Mantenha-o vivo e específico — detalhado o bastante para retomar sem reconstruir o raciocínio.
 
-**Última atualização:** 2026-06-21 (MVP do servidor MCP completo)
+**Última atualização:** 2026-06-21 (VALIDADO contra a conta real)
 
 ## Onde parei
-MVP funcional end-to-end commitado e no GitHub (`pedrobraiti/mcp-ibkr-agent`). 19 testes passando, ruff limpo. Pronto:
-- **domain/** — modelos + ports.
-- **adapters/cpapi/** — client, GatewayAuth, CpapiMarketData, CpapiBroker (com loop de reply + allow-list).
-- **safety/** — GuardedBroker (live lock, dry-run, limite de valor, RTH) + market_hours.
-- **server/** — FastMCP (mcp 1.28) com 9 tools + composition root (`build_services`). Console script `mcp-ibkr-agent`.
-- README completo + LICENSE MIT.
-
-O código está **completo mas NÃO validado contra a IBKR real** — todos os testes usam mocks (respx) e fakes. Falta a validação empírica no paper (precisa do gateway rodando + login).
+Sistema **validado ponta a ponta contra a conta REAL** `U24235856` e funcionando. O healthcheck (`python -m ibkr_agent.healthcheck`) retornou: auth `authenticated:true, connected:true`; conta Pro com `supportsCashQty:true` e `supportsFractions:true`; **saldo US$8.87**; cotação AAPL 297.23; 0 posições. 19 testes passando, ruff limpo. Tudo commitado e no GitHub.
 
 ## Contexto mental
-Arquitetura travada (ver `.claude/decisions.md`): CPAPI + cashQty, hexagonal, **OAuth descartado** (auth só Gateway+tickle), paper+trava live. Decisões do adapter vieram do relatório de pesquisa da CPAPI (loop de reply, warmup duplo, /iserver/accounts antes de operar, username dedicado, rate limit 10 req/s, manutenção ~01:00). Auth hoje é garantida via `ensure_session()` no início de cada tool — sem loop de tickle em background ainda (suficiente p/ /invest manual; autônomo de longa duração vai querer o tickle periódico).
+Arquitetura travada e CONFIRMADA na prática (ver `.claude/decisions.md`): CPAPI + cashQty (fracionário liberado na conta), hexagonal, OAuth descartado (só Gateway), paper+trava live. 
+**Login do gateway** foi o grande atrito — destravou com: restart limpo do gateway + login em aba anônima + sem sessão concorrente (mobile/web deslogados). A build de 2023 do launcher NÃO era o problema (serverVersion runtime = 10.46.1l Jun/2026). Receita completa na memória global `ibkr-gateway-login`. Detalhe: nesta máquina a PAPER não conecta (ssodh 500), mas a conta REAL conecta — usar a real.
+O `.env` está apontando p/ a conta real com `TRADING_MODE=live`, mas `TRADING_ALLOW_LIVE=false` e `TRADING_DRY_RUN=true` → leitura segura, nenhuma ordem real dispara.
 
 ## Próximo passo concreto
-Validação no PAPER, com o usuário: subir o Client Portal Gateway, logar, preencher `.env` (IBKR_ACCOUNT_ID real do paper), registrar o MCP no Claude Code e rodar tool a tool (`session_status` → `market_status` → `get_quote AAPL` → `account_summary` → `buy AAPL cash_amount=... ` em dry-run, depois desligar dry-run). Conferir e fixar: nomes de campo de `/portfolio/.../summary` e `/positions`; se cashQty funciona em paper; quais `messageIds` de warning aparecem (atualizar allow-list em broker.py além do `o354`). Só depois, considerar o loop de tickle em background.
+Quando o usuário quiser: (1) registrar o MCP no Claude Code (`claude mcp add ibkr -- <abs>/.venv/Scripts/python.exe -m ibkr_agent.server.app`) e exercitar as tools de leitura pelo agente; (2) com mercado ABERTO, testar uma ordem real fracionária pequena (cashQty US$1-2) p/ mapear quais warnings de reply (messageIds) aparecem e ajustar a allow-list em `broker.py` (hoje só `o354`); (3) a skill `/invest` em si (prompt de decisão) é tarefa do usuário. Depois: tickle em background + alerta de reautenticação.
 
 ## Em aberto / armadilhas
-- Tudo testado só com mock — comportamento real da CPAPI pode diferir em nomes de campo/fluxo. Validar no paper antes de confiar.
-- allow-list de reply hoje = só `o354`; warning desconhecido bloqueia (proposital). Mapear outros benignos no paper.
-- `is_market_open_now` ainda não trata feriados.
-- Conta live precisa estar aberta/fundeada/IBKR Pro até p/ usar paper.
-- Repo PÚBLICO: segredos só no `.env` local (gitignored).
+- Sessão da live expira (~ horas) e cai na manutenção ~01:00 ET; precisa relogar (sem OAuth p/ varejo). Plano: monitor de reauth.
+- Gateway precisa estar rodando + logado p/ qualquer coisa funcionar. Gateway extraído em `C:\Users\ACS Gamer\Documents\vscode-local\ibkr-gateway` (fora do repo); subir com `./bin/run.bat root/conf.yaml`.
+- allow-list de reply só tem `o354`; mapear outros no teste com mercado aberto.
+- bid/ask vieram None (sem subscrição de market data); last_price funciona. Ordens são MKT, então ok.
+- Precisão float: saldo já arredondado p/ centavos; positions (mktPrice/avgCost) ainda não — polir quando houver posição real.
+- Repo PÚBLICO: `.env` (com a conta real) é gitignored; nunca commitar.
 
 ## Como retomar rápido
-- Testes: `.venv/Scripts/python.exe -m pytest -q` | lint: `.venv/Scripts/python.exe -m ruff check .`
-- Rodar o MCP: `.venv/Scripts/python.exe -m ibkr_agent.server.app` (precisa do gateway logado).
-- Registrar no Claude Code: `claude mcp add ibkr -- <abs>/.venv/Scripts/python.exe -m ibkr_agent.server.app`
-- Estrutura: `src/ibkr_agent/{domain,adapters/cpapi,safety,server}/`.
-- Relatórios de pesquisa (fracionário + CPAPI) estão no histórico da conversa; novo prompt de pesquisa → entregar ao usuário (ver CLAUDE.md).
+- Healthcheck: `.venv/Scripts/python.exe -m ibkr_agent.healthcheck` (precisa gateway logado).
+- Testes: `.venv/Scripts/python.exe -m pytest -q` | lint: `ruff check .`
+- Rodar MCP: `.venv/Scripts/python.exe -m ibkr_agent.server.app`.
+- Subir gateway: em `C:\Users\ACS Gamer\Documents\vscode-local\ibkr-gateway` → `./bin/run.bat root/conf.yaml`; login em https://localhost:5000 (aba anônima).
+- Memória global: `agentic-trading-architecture`, `ibkr-gateway-login`, `research-channel`.

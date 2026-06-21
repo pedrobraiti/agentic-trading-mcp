@@ -29,6 +29,10 @@ Registro de decisões com o "porquê". Append-only — não edita entradas antig
 **Implicações operacionais confirmadas:** sessão expira ~6min sem tickle (tickle a cada ~60s); duração máx 24h com reset à meia-noite; manutenção diária ~01:00 local derruba a sessão (agendar DCA fora disso); **1 brokerage session por username** → usar username dedicado ao bot; `GET /iserver/accounts` obrigatório antes de operar; rate limit 10 req/s no gateway; conta live precisa estar aberta/fundeada/IBKR Pro mesmo p/ usar só o paper.
 **Alternativas consideradas:** OAuth headless (era o alvo — agora inviável p/ varejo).
 
+## 2026-06-21 — Validação contra conta real confirma a aposta arquitetural (CPAPI + cashQty)
+**Motivo:** o sistema foi testado ponta a ponta contra a conta live `U24235856` e funcionou: auth/connected OK, saldo lido (US$8.87), cotação e posições. As flags da conta confirmam o requisito-chave: `supportsCashQty:true` e `supportsFractions:true` (e `liteUser:false` → Pro). Ou seja, a decisão de ir de CPAPI por causa do fracionário estava certa e é executável nesta conta.
+**Achados operacionais:** o build de 2023 do gateway NÃO é problema (serverVersion em runtime = Build 10.46.1l, Jun/2026 — conecta no backend atual). O login só destravou com restart limpo do gateway + aba anônima + sem sessão concorrente (receita na memória global [[ibkr-gateway-login]]). Paper não conectava nesta máquina; a real conecta.
+
 ## 2026-06-21 — Escopo = paper primeiro + trava dura para live
 **Motivo:** segurança. Opera de fato na conta paper `U24235856`. `live` existe atrás de flag explícita, com dry-run como padrão, confirmação obrigatória e limite de valor.
 **Alternativas consideradas:** só leitura/simulação primeiro (lento demais); paper-only sem caminho p/ live (não atende objetivo final).

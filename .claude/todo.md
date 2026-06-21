@@ -3,14 +3,15 @@
 Plano vivo do projeto. Tarefas e subtarefas, marcadas conforme concluídas.
 
 ## Em progresso
-- [ ] Validação empírica no PAPER (com o gateway rodando): autenticação, fracionário/cashQty, campos de summary/positions, quais warnings de reply são benignos
+- [ ] Registrar o MCP no Claude Code e testar as tools de leitura ponta a ponta pelo agente (quando o usuário quiser começar a skill /invest)
 
 ## Próximas
-- [ ] Loop de `tickle` em background (keep-alive) — hoje a sessão é garantida via ensure_session() por chamada; autônomo de longa duração pede tickle periódico
+- [ ] Testar uma ordem real fracionária ($1-2 em cashQty) com mercado ABERTO — mapear quais warnings de reply (messageIds) aparecem e ajustar a allow-list além do `o354`
+- [ ] Loop de `tickle` em background + monitor que avisa quando a sessão cair (reautenticar)
 - [ ] Tratar feriados no `is_market_open_now` (calendário de mercado)
-- [ ] (Opcional) acompanhar preenchimento de ordem (status Filled) e P&L pós-venda
-- [ ] (Futuro) adapter de dados ib_async no MarketDataPort
-- [ ] (Descartado) OAuth — IBKR não libera p/ varejo (ver decisions.md)
+- [ ] Polir precisão de positions (mktPrice/avgCost vêm como float) quando houver posições reais
+- [ ] (Futuro) acompanhar preenchimento de ordem (status Filled) e P&L pós-venda
+- [ ] (Descartado) OAuth — IBKR não libera p/ varejo; auth só Gateway (ver decisions.md)
 
 ## Concluído
 - [x] Setup inicial do projeto
@@ -22,3 +23,5 @@ Plano vivo do projeto. Tarefas e subtarefas, marcadas conforme concluídas.
 - [x] `safety/` — GuardedBroker (decorator do BrokerPort): live lock, dry-run padrão, limite de valor (notional via quote p/ quantity), RTH; market_hours. Testes com fakes
 - [x] `server/` — FastMCP (mcp 1.28) com tools (session_status, market_status, get_quote, account_summary, positions, buy, sell, cancel_order, open_orders) + composition root (build_services); console script `mcp-ibkr-agent`. Smoke tests. 19 testes no total
 - [x] README completo (setup gateway, username dedicado, fracionário, registro no Claude Code) + LICENSE MIT
+- [x] VALIDAÇÃO REAL: sistema testado contra a conta live U24235856 — auth/connected OK, supportsCashQty/supportsFractions=True (Pro), saldo US$8.87, cotação e posições funcionando. Build de 2023 não é problema (serverVersion runtime = 10.46.1l Jun/2026)
+- [x] `healthcheck` (módulo + console script `ibkr-healthcheck`): relatório de conexão/conta/saldo. Fix de precisão de saldo (arredonda p/ centavos) e de encoding (sem emoji, console Windows cp1252)

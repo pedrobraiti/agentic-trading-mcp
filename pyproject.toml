@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 mcp-ibkr-agent = "ibkr_agent.server.app:main"
+ibkr-healthcheck = "ibkr_agent.healthcheck:main"
 
 [build-system]
 requires = ["hatchling"]

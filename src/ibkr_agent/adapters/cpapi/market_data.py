@@ -119,9 +119,9 @@ def _to_position(raw: dict) -> Position:
 
 def _amount(data: dict, key: str) -> Decimal | None:
     field = data.get(key)
-    if isinstance(field, dict):
-        return _to_decimal(field.get("amount"))
-    return _to_decimal(field)
+    raw = _to_decimal(field.get("amount")) if isinstance(field, dict) else _to_decimal(field)
+    # Valores de saldo vêm como float com ruído (ex.: 8.869999...) — arredonda p/ centavos.
+    return raw.quantize(Decimal("0.01")) if raw is not None else None
 
 
 def _to_decimal(value: object) -> Decimal | None:

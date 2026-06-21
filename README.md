@@ -63,6 +63,23 @@ Veja `.env.example`. Principais chaves:
 
    (ou rode direto para testar: `python -m ibkr_agent.server.app`)
 
+3. **Verifique a conexão** a qualquer momento (com o gateway logado):
+
+   ```bash
+   python -m ibkr_agent.healthcheck   # ou: ibkr-healthcheck
+   ```
+
+   Mostra versão do servidor, status de auth, flags da conta (`supportsCashQty`/`supportsFractions`), saldo e uma cotação.
+
+### Troubleshooting do login
+
+Se o navegador mostra **"Client login succeeds"** mas a API segue `authenticated:false`/`connected:false` (ou `ssodh/init` dá HTTP 500 / `no bridge`):
+
+- **Reinicie o gateway limpo** (encerre o processo Java e suba de novo).
+- Logue numa **aba anônima** do Chrome (cookies antigos atrapalham).
+- **Deslogue sessões concorrentes**: IBKR Mobile e Client Portal web (1 brokerage session por username).
+- A versão antiga do *launcher* (2023) **não** é o problema — em runtime o gateway conecta no backend atual.
+
 ## Tools expostas
 
 `session_status`, `market_status`, `get_quote`, `account_summary`, `positions`, `buy`, `sell`, `cancel_order`, `open_orders`.
