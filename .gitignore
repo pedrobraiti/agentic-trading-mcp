@@ -24,5 +24,6 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Marcador do hook de memória (não versionar)
-.claude/.last-stop-signature
+# Memória de trabalho do agente: journals com notas internas (account id, saldos,
+# "de onde parei"). Ficam locais — fora do repo público. O CLAUDE.md (raiz) segue versionado.
+.claude/
