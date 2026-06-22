@@ -16,9 +16,17 @@ from decimal import Decimal
 from ...domain.models import OrderRequest, OrderResult, OrderSide, OrderStatus, OrderType
 from .client import CpapiClient, CpapiError
 
-# Warnings benignos aceitos por padrão. "o354" = "order without market data",
-# onipresente em conta paper sem subscrição de dados.
-DEFAULT_ACCEPTED_MESSAGE_IDS = frozenset({"o354"})
+# Warnings benignos aceitos por padrão — confirmações de precaução padrão da CPAPI
+# para o nosso tipo de ordem (MKT + cashQty). A própria API marca todos como
+# isSuppressible=true / "Accept and Continue". Mapeados ao vivo na conta real:
+#   o354   "order without market data" (sem subscrição de dados)
+#   o10164 Market Order Confirmation (risco da ordem a mercado — usamos MKT de propósito)
+#   o10223 Confirm Mandatory Cap Price (IB pode aplicar teto/piso de proteção)
+#   o10151 disclaimer: responsabilidade do trader sobre detalhes de cash quantity
+#   o10153 Cash Quantity Order Confirmation (cashQty é simulado: cancela ao gastar o valor)
+DEFAULT_ACCEPTED_MESSAGE_IDS = frozenset(
+    {"o354", "o10164", "o10223", "o10151", "o10153"}
+)
 
 _MAX_REPLY_ROUNDS = 5
 

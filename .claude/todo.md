@@ -3,10 +3,11 @@
 Plano vivo do projeto. Tarefas e subtarefas, marcadas conforme concluídas.
 
 ## Em progresso
-- [ ] (AMANHÃ, mercado aberto) Numa sessão NOVA do Claude Code: usar as tools do MCP `ibkr` (já registrado) — session_status, market_status, get_quote, account_summary, positions — e depois testar uma ordem real fracionária mínima
+- [ ] **Suportar venda fracionária por quantidade** (cashQty é buy-only — ver decisions.md 2026-06-22): `OrderRequest.quantity` de `int` → `Decimal`; `broker._build_order` envia `float(quantity)`; tools `buy`/`sell` aceitam quantidade fracionária; ajustar guard (notional via quote) e testes. Idealmente adicionar primitiva `close_position(symbol)` que lê o tamanho exato e vende tudo.
 
 ## Próximas
-- [ ] Testar uma ordem real fracionária ($1-2 em cashQty) com mercado ABERTO — mapear quais warnings de reply (messageIds) aparecem e ajustar a allow-list além do `o354`
+- [ ] Ao BLOQUEAR um warning fora da allow-list, enviar `Decline` (`reply` com `confirmed:false`) em vez de só não responder — hoje deixa uma ordem `Inactive` órfã na conta (vista no teste: 864501251/520/523)
+- [ ] No `sell` por valor em US$: converter dólar→ações via cotação (cashQty não vale p/ venda); para "vender tudo" usar a quantidade exata da posição (evita o warning `o2137`)
 - [ ] Loop de `tickle` em background + monitor que avisa quando a sessão cair (reautenticar)
 - [ ] Tratar feriados no `is_market_open_now` (calendário de mercado)
 - [ ] Polir precisão de positions (mktPrice/avgCost vêm como float) quando houver posições reais
@@ -27,3 +28,4 @@ Plano vivo do projeto. Tarefas e subtarefas, marcadas conforme concluídas.
 - [x] `healthcheck` (módulo + console script `ibkr-healthcheck`): relatório de conexão/conta/saldo. Fix de precisão de saldo (arredonda p/ centavos) e de encoding (sem emoji, console Windows cp1252)
 - [x] `config.py` acha o `.env` por caminho ABSOLUTO (funciona quando o Claude Code lança o MCP de outro CWD)
 - [x] MCP `ibkr` REGISTRADO no Claude Code (escopo local, `claude mcp add`) — status Connected. Tools aparecem numa sessão NOVA
+- [x] TESTE DE ORDEM REAL (mercado aberto, conta real): round-trip US$2 em AAPL. BUY via `cashQty` executou (0.0066 @ 298.96); allow-list de reply mapeada ao vivo (`o354`+`o10164`+`o10223`+`o10151`+`o10153`). Descoberta: `cashQty` é buy-only → venda fechada por quantidade fracionária exata (0.0066 @ 300.41); caixa recuperado (US$8.84, flat). Ver decisions.md 2026-06-22
