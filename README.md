@@ -130,7 +130,7 @@ Cada tool devolve um envelope `{"ok": ..., "data": ...}`. Exemplo real de uma co
 - **paper** por padrão; **live** bloqueado a menos que `TRADING_ALLOW_LIVE=true`.
 - **dry-run** ligado por padrão (não envia ordem de verdade).
 - Ordem acima de `MAX_ORDER_VALUE` é recusada.
-- Ordens só durante o pregão (RTH).
+- Ordens só durante o pregão (RTH), considerando **feriados da NYSE** (via lib `holidays`).
 - Warnings de confirmação da CPAPI só são auto-aceitos via allow-list; warning desconhecido **bloqueia** a ordem.
 
 ## Desenvolvimento

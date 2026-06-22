@@ -13,6 +13,7 @@ dependencies = [
     "pydantic-settings>=2.3",
     "python-dotenv>=1.0",
     "tzdata>=2024.1",
+    "holidays>=0.50",
 ]
 
 [project.optional-dependencies]
