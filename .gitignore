@@ -13,12 +13,13 @@ __pycache__/
 .env
 *.local
 
-# Dados / logs / DB
+# Data / logs / DB
 data/
+logs/
 *.db
 *.log
 
-# SO / editor
+# OS / editor
 .DS_Store
 Thumbs.db
 .idea/

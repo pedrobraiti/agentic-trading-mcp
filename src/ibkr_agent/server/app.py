@@ -165,6 +165,18 @@ async def open_orders() -> dict:
         return _err(exc)
 
 
+@mcp.tool()
+async def trade_history(limit: int = 50) -> dict:
+    """Audit log of the agent's recent order attempts (buys, sells, dry-runs, blocks).
+
+    Reads the local trade journal — answers "what did my agent do?". Does not hit IBKR.
+    """
+    try:
+        return _ok(services().journal.read(limit=limit))
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
 async def _place(
     side: OrderSide, symbol: str, cash_amount: float | None, quantity: float | None
 ) -> dict:

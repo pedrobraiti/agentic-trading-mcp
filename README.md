@@ -81,6 +81,8 @@ See `.env.example`. Main keys:
 | `TRADING_ALLOW_LIVE` | `false` | Hard lock: `live` only trades if `true` |
 | `TRADING_DRY_RUN` | `true` | Validates but **does not send** orders |
 | `MAX_ORDER_VALUE` | `100.0` | Per-order limit (USD) |
+| `MAX_DAILY_VALUE` | — | Cumulative daily buy cap (empty = no cap) |
+| `DUPLICATE_WINDOW_SECONDS` | `5` | Reject identical orders within this window (`0` = off) |
 
 ## Running
 
@@ -142,11 +144,12 @@ If you log in and approve 2FA but **nothing happens** — the page just sits the
 
 ## Exposed tools
 
-`session_status`, `market_status`, `get_quote`, `account_summary`, `positions`, `buy`, `sell`, `close_position`, `cancel_order`, `open_orders`.
+`session_status`, `market_status`, `get_quote`, `account_summary`, `positions`, `buy`, `sell`, `close_position`, `cancel_order`, `open_orders`, `trade_history`.
 
 - `buy` takes `cash_amount` (USD, fractional via `cashQty`) **or** `quantity` (shares, fractional ok).
 - `sell` takes only `quantity` (shares, fractional ok). IBKR does **not** allow selling by dollar amount — `cashQty` is buy-only.
 - `close_position(symbol)` closes 100% of a position by trading the exact fractional quantity.
+- `trade_history(limit)` returns the audit log of recent order attempts (buys, sells, dry-runs, blocks) — answers "what did my agent do?".
 
 ## Usage example
 
@@ -182,6 +185,9 @@ Every tool returns an `{"ok": ..., "data": ...}` envelope. A real example of an 
 - Orders above `MAX_ORDER_VALUE` are rejected.
 - Orders only during regular trading hours (RTH), accounting for **NYSE holidays** (via the `holidays` lib).
 - CPAPI confirmation warnings are auto-accepted only through an allow-list; an unknown warning **blocks** the order.
+- Optional **daily spend cap** (`MAX_DAILY_VALUE`) across all buys, tracked in the audit log — not just per-order.
+- **Duplicate-order guard**: an identical order within `DUPLICATE_WINDOW_SECONDS` is rejected (protects against timeout/retry double-buys).
+- Every order attempt (sent, dry-run, or blocked) is written to a local **audit log** (`logs/trades.jsonl`, gitignored).
 
 ## Development
 

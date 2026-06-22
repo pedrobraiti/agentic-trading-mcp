@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     trading_allow_live: bool = False
     trading_dry_run: bool = True
     max_order_value: Decimal = Decimal("100")
+    # Cumulative spend across all buys in a day (market tz). None = no daily cap.
+    max_daily_value: Decimal | None = None
+    # Reject an identical order (symbol/side/size) placed within this window. 0 = off.
+    duplicate_window_seconds: float = 5.0
+
+    # Audit
+    trade_journal_path: str = "logs/trades.jsonl"
 
     # Session / network
     tickle_interval_seconds: int = 60

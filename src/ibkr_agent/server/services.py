@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from ..adapters.cpapi import CpapiBroker, CpapiClient, CpapiMarketData, GatewayAuth
 from ..config import Settings, get_settings
+from ..journal import TradeJournal
 from ..safety import GuardedBroker, is_market_open_now
 
 
@@ -20,6 +21,7 @@ class Services:
     auth: GatewayAuth
     market_data: CpapiMarketData
     broker: GuardedBroker
+    journal: TradeJournal
 
     def market_is_open(self) -> bool:
         return is_market_open_now(
@@ -35,6 +37,9 @@ def build_services(settings: Settings | None = None) -> Services:
     auth = GatewayAuth(client)
     market_data = CpapiMarketData(client, settings.ibkr_account_id)
     raw_broker = CpapiBroker(client, settings.ibkr_account_id, market_data.resolve_conid)
+    journal = TradeJournal(
+        settings.trade_journal_path, market_timezone=settings.market_timezone
+    )
     guarded = GuardedBroker(
         raw_broker,
         market_data,
@@ -46,6 +51,9 @@ def build_services(settings: Settings | None = None) -> Services:
         is_market_open=lambda: is_market_open_now(
             settings.market_timezone, settings.market_open_time, settings.market_close_time
         ),
+        journal=journal,
+        max_daily_value=settings.max_daily_value,
+        duplicate_window_seconds=settings.duplicate_window_seconds,
     )
     return Services(
         settings=settings,
@@ -53,4 +61,5 @@ def build_services(settings: Settings | None = None) -> Services:
         auth=auth,
         market_data=market_data,
         broker=guarded,
+        journal=journal,
     )

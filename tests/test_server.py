@@ -17,6 +17,7 @@ async def test_tools_are_registered():
         "close_position",
         "cancel_order",
         "open_orders",
+        "trade_history",
     }
     assert expected <= names
 

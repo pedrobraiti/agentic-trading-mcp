@@ -114,3 +114,31 @@ async def test_happy_path_delegates_to_inner():
 
     assert result.order_id == "real-1"
     assert len(broker.placed) == 1
+
+
+def _buy(symbol: str, amount: str) -> OrderRequest:
+    return OrderRequest(symbol=symbol, side=OrderSide.BUY, cash_qty=Decimal(amount))
+
+
+async def test_daily_limit_blocks_after_cumulative_spend(tmp_path):
+    from ibkr_agent.journal import TradeJournal
+
+    journal = TradeJournal(tmp_path / "trades.jsonl")
+    guarded = _guarded(FakeBroker(), FakeMarketData(Decimal("10")),
+                       journal=journal, max_daily_value=Decimal("40"))
+
+    await guarded.place_order(_buy("AAPL", "30"))
+    with pytest.raises(SafetyError, match="Daily spend limit"):
+        await guarded.place_order(_buy("MSFT", "20"))
+
+
+async def test_duplicate_order_blocked(tmp_path):
+    from ibkr_agent.journal import TradeJournal
+
+    journal = TradeJournal(tmp_path / "trades.jsonl")
+    guarded = _guarded(FakeBroker(), FakeMarketData(Decimal("10")),
+                       journal=journal, duplicate_window_seconds=30)
+
+    await guarded.place_order(_buy("AAPL", "10"))
+    with pytest.raises(SafetyError, match="Duplicate"):
+        await guarded.place_order(_buy("AAPL", "10"))
