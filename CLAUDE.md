@@ -1,78 +1,92 @@
-# Instruções para o Claude neste projeto
+# Valet — guide for Claude Code
 
-## Memória persistente
+This file is loaded automatically when this repo is opened in Claude Code. If a user
+asks you to help them set up or use Valet, follow this guide. Your role is twofold:
+**help them install and connect Valet**, and — once it's running — **place the trades
+they ask for**. The trading *decision* (what/when) is always the user's; Valet is just
+the reliable execution plumbing.
 
-Ao iniciar **qualquer** conversa neste projeto, antes de agir:
-1. Leia `.claude/handoff.md` **PRIMEIRO** — é o ponteiro mais fresco: responde "de onde parei" com detalhe.
-2. Leia `.claude/context.md` para o estado macro/estável do projeto.
-3. Leia `.claude/todo.md` para saber o que está em progresso e o que vem a seguir.
-4. Rode `git log --oneline -20` para ver atividade recente.
-5. Se a tarefa tocar em área sensível/arquitetural, leia `.claude/decisions.md`.
+Valet is an MCP server that trades on **Interactive Brokers**, including **fractional
+shares by dollar amount**. See `README.md` for the full picture and `DECISIONS.md` for
+the reasoning behind the design.
 
-### Manter o handoff vivo
+---
 
-O `.claude/handoff.md` é o que permite a **próxima sessão começar de onde esta parou**. Trate-o como documento vivo:
-- Ao concluir qualquer passo significativo (não só no fim da sessão), atualize-o.
-- Escreva com detalhe suficiente para um chat novo retomar sem reconstruir seu raciocínio: onde parou, o contexto mental, o próximo passo concreto e o que está em aberto.
-- Atualize a data e **sobrescreva** o conteúdo antigo — ele reflete sempre o ESTADO ATUAL de "onde paramos", não é histórico append-only (esse papel é do git e do `decisions.md`).
+## Helping a user set it up
 
-## Disciplina do TODO
+Walk the user through the steps below. Run the commands you can; clearly hand off the
+ones only they can do (anything on the IBKR side — you cannot log in for them).
 
-- O `.claude/todo.md` é **mandatório** e deve sempre refletir a realidade do projeto.
-- Ao sair do planning mode (ou após planejar qualquer coisa com o usuário), atualize o TODO com tarefas e subtarefas granulares.
-- Marque `[x]` a subtarefa **no mesmo commit** em que ela é concluída.
-- Subtarefas devem ser pequenas e modulares — se uma não cabe em um commit, quebra em menores.
+### 1. Install (you can do this)
 
-## Disciplina de commits
+```bash
+python -m venv .venv
+# Windows (PowerShell): & ".venv\Scripts\Activate.ps1"
+# Linux/macOS:          source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+```
 
-- Sempre que uma subtarefa do TODO for **concluída** (não trabalho intermediário), faça um commit.
-- Use **Conventional Commits**: `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`, `test:`, `style:`.
-- Mensagens claras, no imperativo, descrevendo o **porquê** quando não óbvio.
-- **Nunca** inclua `Co-Authored-By: Claude` nas mensagens de commit.
-- Antes de cada commit, avalie e atualize **no mesmo commit** se necessário:
-  - `.claude/handoff.md` (de onde parei — detalhado, refletindo o estado atual).
-  - `.claude/todo.md` (marcar subtarefa concluída).
-  - `.claude/context.md` (estado atual mudou?).
-  - `.claude/decisions.md` (houve decisão arquitetural nova?).
-  - `README.md` (mudou stack, dependências, forma de rodar?).
-  - `.env.example` (adicionou/removeu variável em `.env`? espelha aqui sem valores).
+### 2. Configure `.env` (you can do this — ask the user for their values)
 
-## Arquitetura
+Set at least `IBKR_ACCOUNT_ID`. Keep the safe defaults: `IBKR_TRADING_MODE=paper`,
+`TRADING_ALLOW_LIVE=false`, `TRADING_DRY_RUN=true`. Never commit `.env`.
 
-Seguir os padrões definidos em `~/.claude/rules/BEST_PRACTICES.md` (código profissional, modular, testável; arquitetura escolhida conforme o projeto). Este projeto usa **hexagonal (ports & adapters)** — ver `.claude/decisions.md`.
+### 3. The IBKR side (ONLY the user can do this — guide them clearly)
 
-## Pesquisa profunda (canal com IA de pesquisa do usuário)
+- An **IBKR Pro** account, open and funded (required by the API, even for paper).
+- **Fractional permission**: Client Portal → Settings → Trading → Trading Permissions →
+  Stocks → check **"Global (Trade in Fractions)"**.
+- A **dedicated username** for the bot (IBKR allows one brokerage session per username;
+  logging into TWS/mobile with the same user kills the gateway session).
+- **Download and start the Client Portal Gateway** (Java app), then **log in via the
+  browser** at `https://localhost:5000` with 2FA. This manual login is unavoidable —
+  IBKR has no OAuth for retail. See the "Gateway setup" and "Login troubleshooting"
+  sections of the README.
 
-Sempre que surgir uma dúvida que exija **pesquisa profunda** (API mudando, comportamento incerto da IBKR, comparação de libs, qualquer fato que eu não deva responder de memória):
-- **Não chute.** Escreva um **prompt de pesquisa completo e auto-contido** e entregue ao usuário.
-- O usuário leva esse prompt a uma IA de pesquisa avançada e me traz o relatório de volta.
-- Essa IA produz relatórios muito bons (fontes citadas, datas, separação fato/relato/desatualizado) — usar esse canal a favor sempre que valer a pena.
-- Bom prompt de pesquisa: contexto do projeto, perguntas numeradas e específicas, pedido de fontes+datas, e formato de saída desejado (tabela comparativa, recomendação final).
-- Web search/Context7 próprios servem para checagens rápidas; para investigação que muda decisão de arquitetura, prefira o canal do usuário.
+### 4. Register the MCP server with Claude Code
 
-## Autonomia
+```bash
+claude mcp add ibkr -- /path/to/.venv/Scripts/python.exe -m ibkr_agent.server.app
+```
 
-Neste projeto você tem autonomia ampliada — use com critério profissional (autonomia controlada, não automática).
+The tools appear in a **new** Claude Code session.
 
-### Subagentes
-- Delegue buscas amplas e trabalho paralelo a subagentes para manter o contexto principal limpo: `Explore` para varreduras em muitos arquivos, `Plan` para desenhar implementação, `general-purpose` para tarefas multi-etapa.
-- Use quando a tarefa exigir varrer bastante código, pesquisar em paralelo ou planejar algo não-trivial. Para tarefas simples, resolva direto.
+### 5. Verify
 
-### Agent crews
-- Pode ativar múltiplos agentes em paralelo (agent crews) quando a **complexidade do projeto justificar**: várias frentes independentes, refactor grande, investigação ampla.
-- Não use crews para trabalho simples — é custo e ruído desnecessários.
+```bash
+python -m ibkr_agent.healthcheck   # or: ibkr-healthcheck
+```
 
-### Skills (find-skills)
-- Quando perceber que uma capacidade especializada ajudaria (testing, design, deploy, um framework específico), **pesquise proativamente**: `npx skills find <query>` ou a skill `find-skills`.
-- Você pode baixar e instalar skills úteis **sem pedir confirmação**, respeitando estas regras:
-  - **Sempre LOCAL ao projeto, NUNCA global.** Instale com o projeto como diretório atual e **sem** o flag `-g`:
-    ```bash
-    npx skills add <owner/repo> --skill <nome> --copy -y
-    ```
-    Isso instala em `.claude/skills/` (versionado no git). O `--copy` evita symlink apontando pra fora do repo.
-  - **Nunca** use `-g` / `--global`. (A documentação da própria `find-skills` sugere `-g` por padrão — **ignore isso aqui**: neste projeto é sempre local.)
-  - Prefira fontes confiáveis (`anthropics`, `vercel-labs`, `microsoft`) e skills com volume de instalações relevante; desconfie de fontes obscuras.
-  - Informe no resumo qual skill instalou e por quê — a skill entra no commit junto.
+A healthy result shows `authenticated=True connected=True`, the account flags
+(`supportsCashQty`/`supportsFractions`), the balance, and a quote.
 
-### MCP
-- Livre para usar os MCPs disponíveis (Context7 para doc atualizada de libs, Serena em codebase grande, GitHub, etc.) quando ajudarem. Decidir por utilidade, caso a caso.
+---
+
+## Using Valet day to day
+
+- Tools: `session_status`, `market_status`, `get_quote`, `account_summary`,
+  `positions`, `buy`, `sell`, `close_position`, `cancel_order`, `open_orders`.
+- `buy` takes `cash_amount` (USD, fractional) or `quantity`. `sell` takes `quantity`
+  (IBKR doesn't allow selling by dollar amount). `close_position(symbol)` exits 100%.
+- Keep the session warm with `python -m ibkr_agent.keepalive` (`ibkr-keepalive`). It
+  alerts (`[ALERT] Reauthentication required: ...`) when the user must log in again.
+
+## Safety — read before placing any order
+
+Valet ships safe by default and you must keep it that way:
+
+- **Never** set `TRADING_ALLOW_LIVE=true` or `TRADING_DRY_RUN=false` on your own. Only
+  do it if the user explicitly asks, understands it means **real money**, and confirms.
+- Orders are blocked outside regular trading hours, above `MAX_ORDER_VALUE`, and when an
+  unknown confirmation warning appears.
+- Before a real order, confirm the symbol, side, and amount back to the user.
+
+---
+
+## Contributing to Valet itself
+
+If the task is changing Valet's code (not just using it): keep the hexagonal structure
+(domain ports, CPAPI adapters, safety guards, MCP server), add tests for new logic
+(the suite runs offline), and make sure `ruff check .` and `pytest -q` pass — CI runs
+both. Commits follow Conventional Commits. See `CONTRIBUTING.md`.

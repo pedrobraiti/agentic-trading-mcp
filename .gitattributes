@@ -1,2 +1,2 @@
-# Normaliza fim de linha: LF no repositório e no checkout.
+# Normalize line endings: LF in the repository and on checkout.
 * text=auto eol=lf

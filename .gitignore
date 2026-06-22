@@ -9,7 +9,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# Segredos / ambiente
+# Secrets / environment
 .env
 *.local
 
@@ -24,6 +24,6 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Memória de trabalho do agente: journals com notas internas (account id, saldos,
-# "de onde parei"). Ficam locais — fora do repo público. O CLAUDE.md (raiz) segue versionado.
+# Agent working memory: internal journals (account id, balances, "where I left off").
+# Kept local — out of the public repo. CLAUDE.md (at the root) stays versioned.
 .claude/

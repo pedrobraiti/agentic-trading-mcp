@@ -1,1 +1,1 @@
-"""Adapters concretos das portas do domínio (ex.: CPAPI da Interactive Brokers)."""
+"""Concrete adapters for the domain ports (e.g. Interactive Brokers CPAPI)."""

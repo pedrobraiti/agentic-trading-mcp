@@ -19,6 +19,8 @@ The investment *decision* (what/when to buy or sell) stays with you and your ski
 
 > ⚠️ **Not financial advice.** Runs against a *paper* account by default; *live* trading requires explicit opt-in. Use at your own risk.
 
+> **What to expect.** First-time setup is roughly **30–60 min**. Valet needs a funded **IBKR Pro** account and a **manual browser login about once a day** — IBKR offers no OAuth for retail, so there is no fully unattended mode (this is an IBKR constraint, not a Valet one). Once the gateway is up and logged in, your agent places orders on demand.
+
 ## Architecture
 
 Hexagonal (ports & adapters). The agent talks only to the MCP tools; the safety guards sit on the path of every order; IBKR is an adapter detail:
@@ -82,8 +84,26 @@ See `.env.example`. Main keys:
 
 ## Running
 
-1. Start the Client Portal Gateway and **log in via the browser** at `https://localhost:5000` (with 2FA).
-2. Register the MCP server with Claude Code:
+### Gateway setup
+
+Valet talks to a local **Client Portal Gateway** — a small Java app from IBKR that bridges to your account. It's the most common place people get stuck, so:
+
+1. Download [`clientportal.gw.zip`](https://download2.interactivebrokers.com/portal/clientportal.gw.zip) (from IBKR's [API page](https://www.interactivebrokers.com/en/trading/ib-api.php)). Requires **Java 8u192+**.
+2. Unzip it somewhere outside this repo and start it:
+
+   ```bash
+   # Linux/macOS:  bin/run.sh root/conf.yaml
+   # Windows:      bin\run.bat root\conf.yaml
+   ```
+
+3. Open `https://localhost:5000` and log in with 2FA. Accept the self-signed certificate warning — it's local and expected.
+4. **You'll know it worked** when the page says **"Client login succeeds"** and `python -m ibkr_agent.healthcheck` shows `authenticated=True connected=True`.
+
+Keep the gateway running while you use Valet; the session needs a fresh login about once a day (see [Keeping the session alive](#keeping-the-session-alive)). If the browser login misbehaves, see [Login troubleshooting](#login-troubleshooting).
+
+### Register and verify
+
+1. With the gateway running and logged in, register the MCP server with Claude Code:
 
    ```bash
    claude mcp add ibkr -- /path/to/.venv/Scripts/python.exe -m ibkr_agent.server.app
@@ -91,7 +111,9 @@ See `.env.example`. Main keys:
 
    (or run it directly to test: `python -m ibkr_agent.server.app`)
 
-3. **Check the connection** anytime (with the gateway logged in):
+   The tools appear in a **new** Claude Code session.
+
+2. **Check the connection** anytime (with the gateway logged in):
 
    ```bash
    python -m ibkr_agent.healthcheck   # or: ibkr-healthcheck
