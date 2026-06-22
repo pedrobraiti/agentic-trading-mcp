@@ -88,6 +88,33 @@ Se o navegador mostra **"Client login succeeds"** mas a API segue `authenticated
 - `sell` aceita só `quantity` (ações, fracionário ok). A IBKR **não** permite venda por valor em US$ — `cashQty` é só para compra.
 - `close_position(symbol)` fecha 100% de uma posição negociando a quantidade fracionária exata.
 
+## Exemplo de uso
+
+Com o MCP registrado, você conversa em linguagem natural e o agente usa as tools:
+
+> **Você:** *"Compre US$ 50 de AAPL."*
+> O agente chama `buy(symbol="AAPL", cash_amount=50)` — a IBKR executa uma ordem **fracionária** (≈ 0,16 ação), sem precisar pagar uma ação inteira (~US$ 300).
+
+> **Você:** *"Feche minha posição em AAPL."*
+> O agente chama `close_position(symbol="AAPL")`, que lê a quantidade exata e vende 100%.
+
+Cada tool devolve um envelope `{"ok": ..., "data": ...}`. Exemplo real de uma compra fracionária executada (validada em conta IBKR ao vivo):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "order_id": "864501253",
+    "status": "filled",
+    "symbol": "AAPL",
+    "side": "BUY",
+    "message": "Bought 0.0066 AAPL Market, Day"
+  }
+}
+```
+
+> A compra fracionária usa `cashQty` (valor em US$). Já a **venda** fracionária é por *quantidade* de ações — a IBKR não aceita `cashQty` em vendas; por isso existe `close_position`, que resolve a quantidade exata para você.
+
 ## Segurança (padrões)
 
 - **paper** por padrão; **live** bloqueado a menos que `TRADING_ALLOW_LIVE=true`.
