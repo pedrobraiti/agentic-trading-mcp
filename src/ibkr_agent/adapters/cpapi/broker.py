@@ -115,6 +115,7 @@ class CpapiBroker:
 
             message_ids = set(question.get("messageIds") or [])
             if not message_ids or not message_ids.issubset(self._accepted):
+                await self._decline(question["id"])
                 texts = "; ".join(question.get("message") or [])
                 ids = message_ids or "(sem id)"
                 raise CpapiError(
@@ -126,6 +127,17 @@ class CpapiBroker:
             )
 
         raise CpapiError("Excesso de rodadas de confirmação da CPAPI; ordem abortada.")
+
+    async def _decline(self, reply_id: str) -> None:
+        """Recusa a ordem pendente (``confirmed: false``) para não deixá-la `Inactive`.
+
+        Best-effort: se a recusa falhar, seguimos para levantar o erro de bloqueio —
+        o importante é não confirmar às cegas, e a recusa é só faxina.
+        """
+        try:
+            await self._client.post(f"/iserver/reply/{reply_id}", json={"confirmed": False})
+        except CpapiError:
+            pass
 
     def _parse_ack(self, response: object, request: OrderRequest) -> OrderResult:
         ack = response[0] if isinstance(response, list) and response else response
