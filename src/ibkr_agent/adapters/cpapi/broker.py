@@ -9,6 +9,7 @@ BLOCKS the order (instead of confirming blindly).
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
@@ -188,25 +189,77 @@ class CpapiBroker:
 
 
 def _parse_preview(response: object, request: OrderRequest) -> OrderPreview:
-    """Parse the whatif response defensively; ``raw`` always carries the full payload."""
+    """Parse the whatif response; ``raw`` always carries the full payload.
+
+    Validated against a live retail whatif: money fields arrive as unit-suffixed
+    strings (``"2.02 USD"``), warnings live in ``warns`` as ``"<code>/<html>"``,
+    and a cash order leaves ``initial``/``equity`` null while reporting the
+    available-funds impact in the ``data`` rows.
+    """
     data = response[0] if isinstance(response, list) and response else response
     data = data if isinstance(data, dict) else {}
     amount = data.get("amount") if isinstance(data.get("amount"), dict) else {}
     initial = data.get("initial") if isinstance(data.get("initial"), dict) else {}
     equity = data.get("equity") if isinstance(data.get("equity"), dict) else {}
-
-    warnings = [str(data[key]) for key in ("warn", "error") if data.get(key)]
+    funds_before, funds_after = _funds_impact(data.get("data"))
 
     return OrderPreview(
         symbol=request.symbol.upper(),
         side=request.side,
-        commission=_dec(amount.get("commission")),
-        amount=_dec(amount.get("total") or amount.get("amount")),
-        margin_change=_dec(initial.get("change")),
-        equity_change=_dec(equity.get("change")),
-        warnings=warnings,
+        commission=_money(amount.get("commission")),
+        amount=_money(amount.get("total") or amount.get("amount")),
+        margin_change=_money(initial.get("change")),
+        equity_change=_money(equity.get("change")),
+        available_funds_before=funds_before,
+        available_funds_after=funds_after,
+        warnings=_preview_warnings(data),
         raw=data or None,
     )
+
+
+_MONEY_RE = re.compile(r"-?\d[\d,]*\.?\d*")
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WARN_CODE_RE = re.compile(r"^\d+/")
+
+
+def _money(value: object) -> Decimal | None:
+    """Pull a number out of values like ``"2.02 USD"`` or ``"2 USD (0.0067 Shares)"``."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return _dec(value)
+    match = _MONEY_RE.search(str(value))
+    return _dec(match.group(0).replace(",", "")) if match else None
+
+
+def _funds_impact(rows: object) -> tuple[Decimal | None, Decimal | None]:
+    if not isinstance(rows, list):
+        return None, None
+    by_name = {row.get("N"): row for row in rows if isinstance(row, dict)}
+    return _row_value(by_name.get("CURRENT_FUNDS")), _row_value(by_name.get("AFTER_FUNDS"))
+
+
+def _row_value(row: object) -> Decimal | None:
+    if not isinstance(row, dict):
+        return None
+    values = row.get("V")
+    if isinstance(values, list):
+        return _money(values[0]) if values else None
+    return _money(values)
+
+
+def _preview_warnings(data: dict) -> list[str]:
+    raw = data.get("warns")
+    if not isinstance(raw, list) or not raw:
+        raw = [data[key] for key in ("warn", "error") if data.get(key)]
+    return [cleaned for item in raw if item and (cleaned := _clean_warning(str(item)))]
+
+
+def _clean_warning(text: str) -> str:
+    text = _WARN_CODE_RE.sub("", text)
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&")
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _live_order_to_result(order: dict) -> OrderResult:

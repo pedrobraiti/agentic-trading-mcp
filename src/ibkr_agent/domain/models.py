@@ -85,9 +85,11 @@ class OrderResult(BaseModel):
 class OrderPreview(BaseModel):
     """Estimated impact of an order before it is sent (IBKR whatif).
 
-    Lets the agent reason about cost and margin before committing money. Parsed
-    fields are best-effort across IBKR response shapes; ``raw`` always carries the
-    full payload.
+    Lets the agent reason about cost and margin before committing money.
+    ``amount`` is the total cash outlay (incl. commission) and ``commission`` the
+    estimated fee. ``margin_change``/``equity_change`` are populated for
+    margin-affecting orders; for fractional cash orders IBKR instead reports the
+    available-funds before/after. ``raw`` always carries the full payload.
     """
 
     symbol: str
@@ -96,6 +98,8 @@ class OrderPreview(BaseModel):
     amount: Decimal | None = None
     margin_change: Decimal | None = None
     equity_change: Decimal | None = None
+    available_funds_before: Decimal | None = None
+    available_funds_after: Decimal | None = None
     warnings: list[str] = []
     raw: dict | None = None
 

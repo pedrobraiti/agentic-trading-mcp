@@ -172,6 +172,9 @@ trustworthy, and it costs little: the journal is dependency-free JSONL, the guar
 cheap checks, and everything is testable offline.
 
 **Notes.** The daily cap and duplicate guard are computed from the journal, so they're
-naturally consistent with what was actually recorded. The `whatif` response is parsed
-defensively (best-effort fields + full `raw`) since its exact shape varies; the parsed
-fields are pending a live confirmation, the raw payload is always returned meanwhile.
+naturally consistent with what was actually recorded. The `whatif` parse is validated
+against a live retail response: IBKR returns money as unit-suffixed strings
+(`"2.02 USD"`), warnings as `"<code>/<html>"` entries, and — for a fractional cash
+order — leaves the margin blocks null while reporting the available-funds impact in
+`data` rows. The parser handles those shapes and the full `raw` payload is always
+returned alongside the structured fields.

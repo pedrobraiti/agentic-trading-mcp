@@ -114,14 +114,29 @@ async def test_cancel_order_fills_symbol_from_live_orders():
 
 @respx.mock
 async def test_preview_order_parses_whatif():
+    # Shape captured from a live retail whatif: unit-suffixed money strings,
+    # warnings as "<code>/<html>", null margin blocks, funds impact in `data`.
     respx.post(f"{BASE}/iserver/account/{ACCT}/orders/whatif").mock(
         return_value=httpx.Response(
             200,
             json={
-                "amount": {"commission": "1.00", "total": "50.00"},
-                "initial": {"change": "10.00"},
-                "equity": {"change": "-1.00"},
-                "warn": "Heads up",
+                "amount": {
+                    "amount": "2 USD (0.0067 Shares)",
+                    "commission": "0.02 USD",
+                    "total": "2.02 USD",
+                },
+                "equity": None,
+                "initial": None,
+                "warn": "22/<h4>Market Order Confirmation</h4>&nbsp;A Market Order...",
+                "warns": [
+                    "22/<h4>Market Order Confirmation</h4>&nbsp;A Market Order...",
+                    "29/<html><h4>Cash Quantity Order Confirmation</h4> Orders...</html>",
+                ],
+                "data": [
+                    {"V": ["0"], "L": "Current Position", "N": "CURRENT_POS"},
+                    {"V": ["9"], "L": "Available Funds", "N": "CURRENT_FUNDS"},
+                    {"V": ["7"], "L": "Post Trade Available Funds*", "N": "AFTER_FUNDS"},
+                ],
             },
         )
     )
@@ -129,15 +144,18 @@ async def test_preview_order_parses_whatif():
     broker = CpapiBroker(client, ACCT, _resolver)
 
     preview = await broker.preview_order(
-        OrderRequest(symbol="aapl", side=OrderSide.BUY, cash_qty=Decimal("50"))
+        OrderRequest(symbol="aapl", side=OrderSide.BUY, cash_qty=Decimal("2"))
     )
 
     assert preview.symbol == "AAPL"
-    assert preview.commission == Decimal("1.00")
-    assert preview.amount == Decimal("50.00")
-    assert preview.margin_change == Decimal("10.00")
-    assert preview.equity_change == Decimal("-1.00")
-    assert preview.warnings == ["Heads up"]
+    assert preview.commission == Decimal("0.02")
+    assert preview.amount == Decimal("2.02")
+    assert preview.margin_change is None
+    assert preview.equity_change is None
+    assert preview.available_funds_before == Decimal("9")
+    assert preview.available_funds_after == Decimal("7")
+    assert preview.warnings[0].startswith("Market Order Confirmation")
+    assert len(preview.warnings) == 2
     await client.aclose()
 
 
