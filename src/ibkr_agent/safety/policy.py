@@ -15,6 +15,7 @@ is provided.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
@@ -81,8 +82,17 @@ class GuardedBroker:
         # Last account identity that passed every check — used as a fallback so a transient
         # failure reading the account doesn't trap an exit (see _verify_account).
         self._verified_identity: dict | None = None
+        # Serializes the check->dispatch->journal critical section: the journal-backed
+        # guards (daily cap, duplicate) read state that is only written after the order is
+        # sent, so two concurrent calls (e.g. parallel tool calls) could both pass before
+        # either records. The lock makes each order atomic w.r.t. the others.
+        self._order_lock = asyncio.Lock()
 
     async def place_order(self, request: OrderRequest) -> OrderResult:
+        async with self._order_lock:
+            return await self._place_order_locked(request)
+
+    async def _place_order_locked(self, request: OrderRequest) -> OrderResult:
         notional: Decimal | None = None
         sent = False
         try:
@@ -106,6 +116,10 @@ class GuardedBroker:
             raise
 
     async def place_bracket(self, bracket: BracketRequest) -> list[OrderResult]:
+        async with self._order_lock:
+            return await self._place_bracket_locked(bracket)
+
+    async def _place_bracket_locked(self, bracket: BracketRequest) -> list[OrderResult]:
         # The entry is the order that spends money; guard it. The exits are part of
         # the same submission and only activate after the entry fills.
         entry = bracket.entry
@@ -325,6 +339,12 @@ class GuardedBroker:
         stop-loss must sit below the current price, and vice-versa). Skipped if no price.
         """
         entry = bracket.entry
+        # A LIMIT entry fills at entry.limit_price, not at the current market — and
+        # BracketRequest already validates the exits against that limit. Only a MARKET
+        # entry fills at ~the live price, so only then is the market-relative check valid
+        # (otherwise we'd wrongly block a legit "buy the dip" bracket).
+        if entry.limit_price is not None:
+            return
         exit_is_sell = entry.side is OrderSide.BUY
         try:
             quote = await self._market_data.get_quote(entry.symbol)

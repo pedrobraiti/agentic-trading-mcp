@@ -300,6 +300,49 @@ async def test_session_status_skips_account_lookup_when_unauthenticated(monkeypa
     assert "account_type" not in out["data"]
 
 
+async def test_close_position_cooldown_blocks_immediate_reclose(monkeypatch):
+    app._recent_closes.clear()
+    market_data = _FakeMarketData()
+    broker = GuardedBroker(
+        _FakeInner(), market_data, mode=TradingMode.PAPER, allow_live=False,
+        dry_run=False, max_order_value=Decimal("1000"), require_market_open=False,
+        journal=TradeJournal("logs/unused.jsonl"),
+    )
+    svc = Services(settings=Settings(ibkr_account_id="DU1"), client=None, auth=_FakeAuth(),
+                   market_data=market_data, broker=broker, journal=broker._journal)
+    monkeypatch.setattr(app, "_services", svc)
+
+    first = await app.close_position("AAPL")
+    assert first["ok"] is True
+    assert first["data"].get("closed") is not False  # it actually dispatched a sell
+
+    second = await app.close_position("AAPL")
+    assert second["ok"] is True
+    assert second["data"]["closed"] is False
+    assert "twice" in second["data"]["reason"]
+    app._recent_closes.clear()
+
+
+async def test_wait_for_fill_stops_on_inactive(monkeypatch):
+    class _InactiveInner(_FakeInner):
+        async def get_order_status(self, order_id: str) -> OrderResult:
+            return OrderResult(order_id=order_id, status=OrderStatus.INACTIVE,
+                               symbol="AAPL", side=OrderSide.BUY)
+
+    broker = GuardedBroker(
+        _InactiveInner(), _FakeMarketData(), mode=TradingMode.PAPER, allow_live=False,
+        dry_run=True, max_order_value=Decimal("1000"), require_market_open=False,
+    )
+    svc = Services(settings=Settings(ibkr_account_id="DU1"), client=None, auth=_FakeAuth(),
+                   market_data=_FakeMarketData(), broker=broker,
+                   journal=TradeJournal("logs/unused.jsonl"))
+    monkeypatch.setattr(app, "_services", svc)
+
+    out = await app.wait_for_fill("x", timeout_seconds=5)
+    assert out["data"]["status"] == "inactive"
+    assert out["data"]["timed_out"] is False
+
+
 async def test_wait_for_fill_returns_on_terminal_status(monkeypatch):
     # _FakeInner.get_order_status returns FILLED, so it resolves on the first poll.
     broker = GuardedBroker(

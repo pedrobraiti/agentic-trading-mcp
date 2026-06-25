@@ -138,6 +138,43 @@ async def test_cancel_order_reports_cancelled_only_when_gateway_confirms():
 
 
 @respx.mock
+async def test_order_status_maps_inactive():
+    # CPAPI signals a rejected/dead order as "Inactive" (not "Rejected") — must not be UNKNOWN.
+    respx.get(f"{BASE}/iserver/account/order/status/9").mock(
+        return_value=httpx.Response(
+            200, json={"order_id": 9, "order_status": "Inactive", "symbol": "AAPL", "side": "B"}
+        )
+    )
+    client = CpapiClient(BASE)
+    broker = CpapiBroker(client, ACCT, _resolver)
+    result = await broker.get_order_status("9")
+    assert result.status.value == "inactive"
+    await client.aclose()
+
+
+@respx.mock
+async def test_cancel_order_question_returns_pending_not_raise():
+    # A cancel that comes back as a confirmation question must NOT be declined+raised
+    # through the order allow-list — report pending with the text and let the caller decide.
+    respx.get(f"{BASE}/iserver/account/orders").mock(
+        return_value=httpx.Response(200, json={"orders": []})
+    )
+    respx.delete(f"{BASE}/iserver/account/{ACCT}/order/99").mock(
+        return_value=httpx.Response(
+            200, json=[{"id": "q1", "message": ["Confirm cancel?"], "messageIds": ["o999"]}]
+        )
+    )
+    client = CpapiClient(BASE)
+    broker = CpapiBroker(client, ACCT, _resolver)
+
+    result = await broker.cancel_order("99")  # must not raise
+
+    assert result.status.value == "pending"
+    assert "Confirm cancel" in (result.message or "")
+    await client.aclose()
+
+
+@respx.mock
 async def test_cancel_order_parses_list_shaped_ack():
     # A list-shaped confirmation must be read, not dropped to "pending".
     respx.get(f"{BASE}/iserver/account/orders").mock(

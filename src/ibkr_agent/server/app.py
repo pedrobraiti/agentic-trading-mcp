@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import AsyncIterator
 from decimal import Decimal
 from typing import Any
@@ -61,6 +62,14 @@ async def _lifespan(_server: FastMCP) -> AsyncIterator[None]:
 
 
 mcp = FastMCP("mcp-ibkr-agent", lifespan=_lifespan)
+
+
+# IBKR's portfolio is eventually-consistent: after a close is sent, the position can still
+# show its old size for tens of seconds. To stop a doc-recommended retry from selling the
+# same position twice (an unintended short), we refuse to re-close the same contract within
+# this cooldown and point the caller to order_status. Keyed by conid → monotonic time sent.
+_CLOSE_COOLDOWN_SECONDS = 45.0
+_recent_closes: dict[int, float] = {}
 
 
 def _ok(data: Any) -> dict:
@@ -222,6 +231,19 @@ async def close_position(symbol: str) -> dict:
                     ),
                 }
             )
+        sent_at = _recent_closes.get(conid)
+        if sent_at is not None and (time.monotonic() - sent_at) < _CLOSE_COOLDOWN_SECONDS:
+            return _ok(
+                {
+                    "closed": False,
+                    "reason": (
+                        f"A close for {symbol.upper()} was just dispatched and IBKR's "
+                        "portfolio may still show the old size. Confirm the fill via "
+                        "order_status / positions before closing again, to avoid selling "
+                        "the position twice (an unintended short)."
+                    ),
+                }
+            )
         await svc.market_data.invalidate_positions()
         rows = await svc.market_data.get_positions()
         position = next((p for p in rows if p.conid == conid), None)
@@ -239,6 +261,7 @@ async def close_position(symbol: str) -> dict:
         side = OrderSide.SELL if position.quantity > 0 else OrderSide.BUY
         request = OrderRequest(symbol=symbol, side=side, quantity=abs(position.quantity))
         result = await svc.broker.place_order(request)
+        _recent_closes[conid] = time.monotonic()
         return _ok(result.model_dump(mode="json"))
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -396,7 +419,7 @@ async def order_status(order_id: str) -> dict:
         return _err(exc)
 
 
-_TERMINAL_STATUSES = {"filled", "cancelled", "rejected"}
+_TERMINAL_STATUSES = {"filled", "cancelled", "rejected", "inactive"}
 _WAIT_POLL_SECONDS = 2.0
 _WAIT_MAX_TIMEOUT = 120.0
 

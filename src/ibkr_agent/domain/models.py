@@ -46,6 +46,10 @@ class OrderStatus(StrEnum):
     CANCELLED = "cancelled"
     REJECTED = "rejected"
     PENDING = "pending"
+    # CPAPI's terminal-but-not-filled state (a rejected/parked/dead order). Distinct from
+    # REJECTED because it can also mean "parked until the market opens"; either way it is
+    # not actively working, so wait_for_fill should stop rather than poll to the timeout.
+    INACTIVE = "inactive"
     UNKNOWN = "unknown"
 
 

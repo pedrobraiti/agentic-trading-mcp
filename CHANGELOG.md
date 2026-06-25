@@ -47,6 +47,21 @@ versioning follows [SemVer](https://semver.org/).
 - **`TRADING_ALLOW_SHORT`** (default `false`) gates whether a SELL may exceed the held
   position.
 
+### Hardened — third audit pass (new lenses: diff, lifecycle/concurrency, API-assumptions)
+- **`close_position` won't sell a position twice during portfolio lag.** A repeat close of
+  the same contract within a cooldown is refused (pointing to `order_status`) — so the
+  doc-recommended "wait and retry" can't open an unintended short.
+- **Order placement is serialized** (an `asyncio.Lock` around check→dispatch→journal), so
+  two parallel tool calls can't both slip past the daily-spend cap or the duplicate guard.
+- **`Inactive` order status is mapped** (CPAPI's real string for a dead/parked order;
+  `Rejected` is TWS-only) and treated as terminal, so `wait_for_fill` stops instead of
+  polling to the timeout on an order that's already done. `PendingCancel`/`ApiCancelled`
+  mapped too.
+- **Bracket exit checks respect a LIMIT entry's fill price** — a valid "buy the dip"
+  bracket is no longer wrongly blocked by comparing exits to the live market.
+- **`cancel_order` no longer raises on a cancel-confirmation question** — it reports
+  pending with the message instead of declining it through the order allow-list.
+
 ### Hardened — second audit pass (run-proven multi-agent review)
 - **Value cap no longer bypassable by a zero/negative price** — a non-positive quote is
   treated like a missing one (fail closed), so it can't make the notional 0 and slip a

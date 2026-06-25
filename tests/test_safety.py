@@ -378,6 +378,43 @@ async def test_account_read_failure_with_no_prior_verification_fails_closed():
         await guarded.place_order(_buy("AAPL", "10"))
 
 
+async def test_concurrent_identical_buys_are_serialized(tmp_path):
+    # Two parallel buys must not both slip past the duplicate guard (the check-then-record
+    # critical section is locked). Exactly one goes through; the other is blocked.
+    import asyncio
+
+    from ibkr_agent.journal import TradeJournal
+
+    journal = TradeJournal(tmp_path / "t.jsonl")
+    broker = FakeBroker()
+    guarded = _guarded(broker, FakeMarketData(Decimal("10")),
+                       journal=journal, duplicate_window_seconds=30)
+    results = await asyncio.gather(
+        guarded.place_order(_buy("AAPL", "10")),
+        guarded.place_order(_buy("AAPL", "10")),
+        return_exceptions=True,
+    )
+    assert len(broker.placed) == 1  # the lock stopped the double-send
+    assert sum(isinstance(r, SafetyError) for r in results) == 1
+
+
+async def test_limit_entry_bracket_not_blocked_by_market_check():
+    from ibkr_agent.domain.models import BracketRequest, OrderType
+
+    # "Buy the dip": LIMIT entry @90, take_profit 95, stop_loss 85 — valid vs the 90 fill,
+    # even though 95 is below the current market (100). Must NOT be blocked.
+    broker = FakeBroker()
+    guarded = _guarded(broker, FakeMarketData(Decimal("100"), held=Decimal("0")))
+    bracket = BracketRequest(
+        entry=OrderRequest(symbol="AAPL", side=OrderSide.BUY, quantity=1,
+                           order_type=OrderType.LIMIT, limit_price=Decimal("90")),
+        take_profit_price=Decimal("95"),
+        stop_loss_price=Decimal("85"),
+    )
+    await guarded.place_bracket(bracket)
+    assert len(broker.placed) == 1
+
+
 async def test_bracket_stop_loss_inverted_vs_market_blocked():
     from ibkr_agent.domain.models import BracketRequest
 

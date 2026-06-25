@@ -49,13 +49,20 @@ _MAX_REPLY_ROUNDS = 12
 # client id (cOID) and only retry when it genuinely didn't land.
 _ORDER_POST_RETRIES = 2
 
+# CPAPI order-status vocabulary: PendingSubmit, PreSubmitted, Submitted, PendingCancel,
+# Cancelled, Filled, Inactive. Note "Rejected" is a TWS-API string CPAPI does NOT emit —
+# a rejected/dead order arrives as "Inactive", so we must map it (else it falls to UNKNOWN
+# and wait_for_fill polls to the timeout on an order that's already dead).
 _STATUS_MAP = {
     "submitted": OrderStatus.SUBMITTED,
     "presubmitted": OrderStatus.PENDING,
     "pendingsubmit": OrderStatus.PENDING,
+    "pendingcancel": OrderStatus.PENDING,
     "filled": OrderStatus.FILLED,
     "cancelled": OrderStatus.CANCELLED,
+    "apicancelled": OrderStatus.CANCELLED,
     "rejected": OrderStatus.REJECTED,
+    "inactive": OrderStatus.INACTIVE,
 }
 
 
@@ -214,13 +221,18 @@ class CpapiBroker:
         response = await self._client.delete(
             f"/iserver/account/{self._account_id}/order/{order_id}"
         )
-        # A cancel can come back as a confirmation question (like an order POST) or as a
-        # list-shaped ack — resolve the question and normalize the list so we read the real
-        # status instead of dropping it to "pending".
-        response = await self._resolve_replies(response)
+        # A cancel can come back as a dict ack, a list-wrapped ack, or (rarely) a
+        # confirmation question. Normalize the list so we read the real status. We do NOT
+        # route this through the order-warning allow-list: a cancel-confirmation id won't
+        # be in it, and declining would refuse the cancel and raise — surprising a caller
+        # pulling a protective stop. A question is reported as PENDING with its text instead.
         ack = response[0] if isinstance(response, list) and response else response
         data = ack if isinstance(ack, dict) else {}
-        message = data.get("msg") if data else (str(response) if response is not None else None)
+        message = data.get("msg") or data.get("message")
+        if isinstance(message, list):
+            message = "; ".join(str(part) for part in message)
+        if message is None and not data and response is not None:
+            message = str(response)
         # IBKR's DELETE only ACKNOWLEDGES the cancel request — it is not confirmation the
         # order is gone (an already-filled order returns 200 with a "cannot be cancelled"
         # msg). Only report CANCELLED when the gateway explicitly says so; otherwise report
