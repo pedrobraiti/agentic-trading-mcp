@@ -19,7 +19,7 @@
 
 **Two MCP servers over one shared safety core**, giving an AI agent (like Claude Code) the ability to trade: **`ibkr`** on **Interactive Brokers** (US stocks, **fractional shares by dollar amount** via `cashQty`) and **`crypto`** on **crypto exchanges** (spot, via CCXT — persistent API key, 24/7). Both expose quotes, balance, positions and **buy/sell** under mirrored tool names.
 
-The investment *decision* (what/when to buy or sell) stays with you and your skill's prompt. This project delivers only the **reliable trading plumbing** — with safety guards on by default.
+The investment *decision* (what/when to buy or sell) stays with you and your skill's prompt — e.g. [**Vizier**](https://github.com/pedrobraiti/vizier-trading-skill), the decision-making brain of this stack. This project delivers only the **reliable trading plumbing** — with safety guards on by default.
 
 > ⚠️ **Not financial advice.** Runs against a *paper* account by default; *live* trading requires explicit opt-in. Use at your own risk.
 
