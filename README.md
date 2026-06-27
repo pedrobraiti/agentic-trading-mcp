@@ -3,11 +3,11 @@
 </p>
 
 <p align="center">
-  <strong>Valet</strong> — an MCP server that trades on Interactive Brokers, so your agent does the legwork and you make the call.
+  <strong>Valet</strong> — an MCP toolkit that trades on <strong>Interactive Brokers and crypto exchanges</strong>, so your agent does the legwork and you make the call.
 </p>
 
 <p align="center">
-  <a href="https://github.com/pedrobraiti/mcp-ibkr-agent/actions/workflows/ci.yml"><img src="https://github.com/pedrobraiti/mcp-ibkr-agent/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/pedrobraiti/agentic-trading-mcp/actions/workflows/ci.yml"><img src="https://github.com/pedrobraiti/agentic-trading-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT">
   <img src="https://img.shields.io/badge/status-live--validated-success" alt="Status: live-validated">
@@ -17,13 +17,13 @@
   <img src="assets/demo.gif" alt="Valet demo: asking the agent to buy $2 of Apple — it previews the cost, places the order, and confirms the fill" width="820">
 </p>
 
-An **MCP server** that gives an AI agent (like Claude Code) the ability to trade on **Interactive Brokers**: quotes, balance, positions and orders, and **buy/sell** — including **fractional shares by dollar amount** (`cashQty`) via the Client Portal API.
+**Two MCP servers over one shared safety core**, giving an AI agent (like Claude Code) the ability to trade: **`ibkr`** on **Interactive Brokers** (US stocks, **fractional shares by dollar amount** via `cashQty`) and **`crypto`** on **crypto exchanges** (spot, via CCXT — persistent API key, 24/7). Both expose quotes, balance, positions and **buy/sell** under mirrored tool names.
 
 The investment *decision* (what/when to buy or sell) stays with you and your skill's prompt. This project delivers only the **reliable trading plumbing** — with safety guards on by default.
 
 > ⚠️ **Not financial advice.** Runs against a *paper* account by default; *live* trading requires explicit opt-in. Use at your own risk.
 
-> **What to expect.** First-time setup is roughly **30–60 min**. Valet needs a funded **IBKR Pro** account and a **manual browser login about once a day** — IBKR offers no OAuth for retail, so there is no fully unattended mode (this is an IBKR constraint, not a Valet one). Once the gateway is up and logged in, your agent places orders on demand.
+> **What to expect.** The **crypto** server is the low-friction path: just a persistent API key, 24/7, no gateway — it can run unattended. The **IBKR** server needs a funded **IBKR Pro** account and a **manual browser login about once a day** (IBKR offers no OAuth for retail — an IBKR constraint, not ours), so the stock side isn't fully hands-off. First-time setup is roughly **30–60 min** per venue.
 
 ## Architecture
 
@@ -90,8 +90,8 @@ Most retail trading APIs force you into whole shares. This project leans on the 
 ## Installation
 
 ```bash
-git clone https://github.com/pedrobraiti/mcp-ibkr-agent.git
-cd mcp-ibkr-agent
+git clone https://github.com/pedrobraiti/agentic-trading-mcp.git
+cd agentic-trading-mcp
 python -m venv .venv
 # Windows (PowerShell): & ".venv\Scripts\Activate.ps1"   (on a policy error: Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass)
 # Linux/macOS:          source .venv/bin/activate

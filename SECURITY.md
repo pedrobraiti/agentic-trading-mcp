@@ -20,6 +20,6 @@ Treat it with the corresponding care.
 
 ## Reporting a vulnerability
 Instead of opening a public issue, use GitHub
-[Security Advisories](https://github.com/pedrobraiti/mcp-ibkr-agent/security/advisories/new)
+[Security Advisories](https://github.com/pedrobraiti/agentic-trading-mcp/security/advisories/new)
 (private disclosure). Describe the impact and how to reproduce it. I'll respond as
 soon as I can.

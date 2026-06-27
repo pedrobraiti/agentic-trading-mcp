@@ -208,8 +208,8 @@ First working release, validated live against a real IBKR account.
 - **Keep-alive** session loop with a reauth alert (`ibkr-keepalive`).
 - **Healthcheck** for connection/account (`ibkr-healthcheck`).
 
-[0.3.0]: https://github.com/pedrobraiti/mcp-ibkr-agent/releases/tag/v0.3.0
-[0.2.2]: https://github.com/pedrobraiti/mcp-ibkr-agent/releases/tag/v0.2.2
-[0.2.1]: https://github.com/pedrobraiti/mcp-ibkr-agent/releases/tag/v0.2.1
-[0.2.0]: https://github.com/pedrobraiti/mcp-ibkr-agent/releases/tag/v0.2.0
-[0.1.0]: https://github.com/pedrobraiti/mcp-ibkr-agent/releases/tag/v0.1.0
+[0.3.0]: https://github.com/pedrobraiti/agentic-trading-mcp/releases/tag/v0.3.0
+[0.2.2]: https://github.com/pedrobraiti/agentic-trading-mcp/releases/tag/v0.2.2
+[0.2.1]: https://github.com/pedrobraiti/agentic-trading-mcp/releases/tag/v0.2.1
+[0.2.0]: https://github.com/pedrobraiti/agentic-trading-mcp/releases/tag/v0.2.0
+[0.1.0]: https://github.com/pedrobraiti/agentic-trading-mcp/releases/tag/v0.1.0
