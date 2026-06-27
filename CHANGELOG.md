@@ -5,6 +5,8 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-27
+
 ### Added
 - **Second MCP server: `crypto` (CCXT) — a spot crypto execution venue.** The repo is now
   a monorepo of two independent execution servers over one shared core: `ibkr` (unchanged)
@@ -19,8 +21,10 @@ versioning follows [SemVer](https://semver.org/).
   guard were extracted into `trading_core`, leaving thin venue adapters (`ibkr_agent`,
   `crypto_agent`). The `GuardedBroker` is now venue-agnostic: it reads a per-venue
   `Capabilities` contract and sizes exits via a `held_quantity` port instead of IBKR's
-  conid. IBKR behavior is unchanged (the original suite stays green; old import paths keep
-  working via shims).
+  conid. IBKR behavior is unchanged (the original suite stays green). This is a breaking
+  internal refactor: the modules were **moved** to `trading_core` and the old import paths
+  removed — `import ibkr_agent.domain.models` no longer resolves; use
+  `trading_core.domain.models` (and likewise `trading_core.safety`).
 - **`session_status` and `portfolio` report `account_type`** (`"LIVE"`/`"PAPER"`)
   straight from IBKR's `isPaper` — the ground truth, independent of the cosmetic
   `IBKR_TRADING_MODE` label. A LIVE account also returns an explicit `warning`, so the
@@ -208,6 +212,7 @@ First working release, validated live against a real IBKR account.
 - **Keep-alive** session loop with a reauth alert (`ibkr-keepalive`).
 - **Healthcheck** for connection/account (`ibkr-healthcheck`).
 
+[0.4.0]: https://github.com/pedrobraiti/agentic-trading-mcp/releases/tag/v0.4.0
 [0.3.0]: https://github.com/pedrobraiti/agentic-trading-mcp/releases/tag/v0.3.0
 [0.2.2]: https://github.com/pedrobraiti/agentic-trading-mcp/releases/tag/v0.2.2
 [0.2.1]: https://github.com/pedrobraiti/agentic-trading-mcp/releases/tag/v0.2.1

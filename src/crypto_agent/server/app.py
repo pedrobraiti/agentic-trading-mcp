@@ -68,9 +68,11 @@ async def session_status() -> dict:
     """Whether the API keys authenticate, plus which environment is live.
 
     Returns `authenticated`, `exchange`, `mode` (sandbox/live), `account_type`
-    ("PAPER"/"LIVE") and — when live — a `warning`. `account_type` is the ground truth to
-    check before trading: LIVE means real money. There is no gateway/login here — either
-    the keys authenticate or they don't.
+    ("PAPER"/"LIVE") and — when live — a `warning`. Unlike IBKR (where `account_type`
+    derives from the broker's real `isPaper`), here `account_type` only echoes the
+    configured `CRYPTO_TRADING_MODE`; it is NOT independently verified against the
+    exchange. Real-money protection rests on the `CRYPTO_ALLOW_LIVE` gate, not on this
+    field. There is no gateway/login here — either the keys authenticate or they don't.
     """
     svc = services()
     try:
