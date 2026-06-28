@@ -100,6 +100,25 @@ def test_spent_today_counts_sent_unconfirmed_and_excludes_failed(tmp_path):
     assert journal.spent_today() == Decimal("30")
 
 
+def test_reconciled_cancel_frees_budget_but_unknown_keeps_counting(tmp_path):
+    # A timed-out intent counts toward spend (fail-safe). If a reconcile later CONFIRMS the
+    # order cancelled (moved no money), the budget must be freed — otherwise a phantom spend
+    # would refuse a later legitimate order. An `unknown` resolution keeps counting (fail-safe).
+    journal = TradeJournal(tmp_path / "trades.jsonl")
+    buy = OrderRequest(symbol="AAPL", side=OrderSide.BUY, cash_qty=Decimal("40"))
+    journal.record_intent(request=buy, mode=TradingMode.LIVE, notional=Decimal("40"),
+                          client_order_id="coid-cancel")
+    other = OrderRequest(symbol="MSFT", side=OrderSide.BUY, cash_qty=Decimal("25"))
+    journal.record_intent(request=other, mode=TradingMode.LIVE, notional=Decimal("25"),
+                          client_order_id="coid-unknown")
+    assert journal.spent_today() == Decimal("65")  # both intents count while in flight
+
+    journal.mark_resolved("coid-cancel", status="cancelled")
+    journal.mark_resolved("coid-unknown", status="unknown")
+    # cancelled → freed (moved no money); unknown → still counts (fail-safe over-block).
+    assert journal.spent_today() == Decimal("25")
+
+
 def test_different_order_type_is_not_a_duplicate(tmp_path):
     # A resting STOP and a panic MARKET sell of the same size are different orders — the
     # second must not be trapped as a duplicate.

@@ -193,8 +193,13 @@ class TradeJournal:
         today = datetime.now(self._tz).date().isoformat()
         groups: dict[str, list[dict]] = defaultdict(list)
         loose: list[dict] = []
+        resolutions: dict[str, str] = {}  # cOID -> terminal status from a reconcile resolution
         for entry in self.read(limit=0):
             if entry.get("kind") == "resolution":
+                coid = entry.get("client_order_id")
+                status = entry.get("status")
+                if coid and status:
+                    resolutions[coid] = status
                 continue
             if entry.get("side") != OrderSide.BUY.value or not entry.get("notional"):
                 continue
@@ -207,15 +212,24 @@ class TradeJournal:
                 loose.append(entry)
 
         total = Decimal(0)
-        for records in list(groups.values()) + [[r] for r in loose]:
+        # A cOID group may carry a reconcile resolution telling us the order's terminal fate;
+        # a loose (cOID-less) legacy record never does.
+        evaluated: list[tuple[list[dict], str | None]] = [
+            (records, resolutions.get(coid)) for coid, records in groups.items()
+        ] + [([r], None) for r in loose]
+        for records, resolution_status in evaluated:
             if not any(r.get("order_id") or r.get("sent") for r in records):
                 continue
-            # Only rejected/cancelled are excluded — NOT `inactive`. CPAPI emits `inactive`
+            # Only rejected/cancelled move no money — NOT `inactive`. CPAPI emits `inactive`
             # for BOTH a dead/rejected order AND one parked until the open, and there is no
-            # reliable sub-reason offline to tell the two apart. So we keep counting an
-            # `inactive` buy toward spend on purpose: the fail-safe direction is to assume
-            # money may have moved (over-block, never over-spend). See ADR-015.
-            if any(r.get("status") in _NO_MONEY_STATUSES for r in records):
+            # reliable sub-reason offline to tell the two apart. So an `inactive` buy keeps
+            # counting toward spend on purpose: the fail-safe direction is to assume money may
+            # have moved (over-block, never over-spend). See ADR-015. A reconcile that DID
+            # confirm the order cancelled/rejected frees the budget — it moved no money.
+            statuses = [r.get("status") for r in records]
+            if resolution_status is not None:
+                statuses.append(resolution_status)
+            if any(s in _NO_MONEY_STATUSES for s in statuses):
                 continue
             notional = next((r.get("notional") for r in records if r.get("notional")), None)
             if notional is None:

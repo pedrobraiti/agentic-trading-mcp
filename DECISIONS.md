@@ -391,3 +391,35 @@ journal's `spent_today`/`has_recent_duplicate` exclude only `rejected`/`cancelle
 **Why.** Both choices follow ADR-013's principle: uncertainty fails closed, and a
 behavior gap is surfaced loudly rather than papered over with a default that could
 surprise someone or a distinction we can't actually make.
+
+## ADR-016 — A reconciled cancel frees daily budget; idempotency is single-writer
+
+**Context.** Two LOW findings from the unattended-safety adversarial pass on the cOID
+idempotency / spend-cap work (0.5.0).
+
+**Decision 1 — a reconcile that confirms *no money moved* frees the daily budget.**
+A timed-out dispatch counts toward `spent_today` while in flight (fail-safe). Previously,
+resolving it via `reconcile_pending` left the phantom spend on the books forever — even when
+the reconcile confirmed the order was `cancelled`/`rejected` and moved no money — which could
+refuse a later *legitimate* order until the daily reset. That is an annoyance, not a safety
+feature: the safe direction is to over-block *uncertain* spend, not *confirmed-zero* spend.
+`spent_today` now honors a terminal reconcile status — a reconciled `cancelled`/`rejected`
+frees the budget, while `unknown`/`filled`/`inactive` keep counting (still fail-safe). This
+also keeps the system from paternalistically blocking a deliberate order for a non-reason.
+
+**Decision 2 — the idempotency guard is single-writer; run one Valet server per account.**
+The persistent cOID guard (`has_unresolved_dispatch`) reads the journal before each order, so
+a crashed/timed-out dispatch that is *relaunched or retried sequentially* is correctly blocked
+across processes — the realistic unattended threat. It does **not** add a cross-process file
+lock, so two genuinely *simultaneous* OS processes sharing one journal + account could both
+pass the check before either writes its intent (a TOCTOU race), and the random per-attempt
+cOID means the venue can't dedupe either. We do not add OS-specific file locking to the
+money path for an unusual deployment; instead the operating contract is: **run a single
+persistent Valet server per account for unattended use.** Closing the simultaneous-process
+case venue-side would mean a *deterministic* cOID (so the broker rejects the duplicate) — that
+belongs with the P8 live-gateway validation of IBKR's cOID dedup, not a blind offline change.
+
+**Why.** Same ADR-013 spine: fix the accounting so confirmed-zero spend doesn't linger
+(correctness + no false refusal), and make the remaining race an explicit, documented
+deployment constraint rather than papering it with platform-specific locking we can't test
+offline in the highest-stakes path.

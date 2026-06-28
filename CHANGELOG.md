@@ -5,6 +5,22 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-28
+
+### Fixed
+- **A reconciled cancel now frees daily budget** (adversarial-QA finding). A timed-out dispatch
+  counts toward `spent_today` while in flight; once `reconcile_pending` confirms it `cancelled`/
+  `rejected` (moved no money) the budget is freed instead of lingering as a phantom spend that
+  could refuse a later legitimate order. `unknown`/`filled`/`inactive` resolutions keep counting
+  (still fail-safe). See ADR-016.
+
+### Documented
+- **Single-writer operating contract** (ADR-016): the persistent cOID idempotency guard blocks a
+  *sequentially* relaunched/retried dispatch across processes (the realistic unattended case), but
+  is not a cross-process lock — run **one persistent Valet server per account** for unattended use.
+  Closing the simultaneous-multi-process race venue-side (deterministic cOID) is deferred to the
+  P8 live-gateway validation.
+
 ## [0.5.0] - 2026-06-28
 
 Hardening for **unattended / autonomous** operation: the safety that matters when no human is
