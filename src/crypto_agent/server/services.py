@@ -20,9 +20,13 @@ from ..config import CryptoSettings, get_settings
 async def _probe_account_info(client: CcxtClient, settings: CryptoSettings) -> dict:
     """Probe the keys (raises if they don't authenticate) and report venue identity.
 
-    ``is_paper`` reflects sandbox vs live — crypto has no independent isPaper ground truth
-    like IBKR, so it is derived from the configured mode. Shared by the guard's account
-    provider and ``session_status`` so both verify the exact same thing.
+    ``is_paper`` reflects sandbox vs live — but, unlike IBKR's ``isPaper``, CCXT exposes no
+    authenticated endpoint that confirms a key pair is testnet vs mainnet, so this verdict is
+    DERIVED from the configured ``CRYPTO_TRADING_MODE``, not venue-confirmed. We flag that with
+    ``identity_verified: False`` so a silent sandbox/live KEY mismatch (live keys under a
+    sandbox label would otherwise read as "PAPER") can't rest on the dry-run flag alone — the
+    guard then requires the explicit ``CRYPTO_ALLOW_LIVE`` ack before any real order. Shared by
+    the guard's account provider and ``session_status`` so both report the exact same thing.
     """
     await client.exchange.fetch_balance()  # raises if the keys don't authenticate
     is_paper = settings.is_sandbox
@@ -30,6 +34,7 @@ async def _probe_account_info(client: CcxtClient, settings: CryptoSettings) -> d
         "account_id": settings.crypto_exchange,
         "is_paper": is_paper,
         "account_type": "PAPER" if is_paper else "LIVE",
+        "identity_verified": False,
     }
 
 

@@ -67,6 +67,9 @@ class GatewayAuth:
             "account_id": account_id,
             "is_paper": is_paper,
             "account_type": None if is_paper is None else ("PAPER" if is_paper else "LIVE"),
+            # IBKR reports isPaper on an authenticated endpoint — the paper/live verdict is
+            # the venue's own ground truth, not a config label, so it is venue-verified.
+            "identity_verified": is_paper is not None,
         }
 
     async def is_authenticated(self) -> bool:

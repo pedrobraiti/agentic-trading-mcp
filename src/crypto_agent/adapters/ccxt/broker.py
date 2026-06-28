@@ -54,9 +54,13 @@ class CcxtBroker:
                 "(no native stop/trailing/bracket)."
             )
         side = request.side.value.lower()
+        # Pass the safety layer's cOID to the exchange as a clientOrderId (CCXT unifies this
+        # via params) so the journaled intent and the live order share an idempotency key —
+        # what lets a timed-out dispatch be reconciled against the venue's open orders.
+        params = {"clientOrderId": request.client_order_id} if request.client_order_id else {}
 
         if request.cash_qty is not None:
-            order = await self._buy_by_value(symbol, request.cash_qty)
+            order = await self._buy_by_value(symbol, request.cash_qty, params)
         else:
             amount = self._client.amount_to_precision(symbol, request.quantity or Decimal(0))
             price = request.limit_price
@@ -68,14 +72,16 @@ class CcxtBroker:
                 side,
                 float(amount),
                 float(price) if price is not None else None,
+                params,
             )
         return self._to_result(order, fallback_symbol=symbol, fallback_side=request.side)
 
-    async def _buy_by_value(self, symbol: str, cost: Decimal) -> dict:
+    async def _buy_by_value(self, symbol: str, cost: Decimal, params: dict | None = None) -> dict:
         """Market BUY for a quote-currency amount (cashQty analogue)."""
+        params = params or {}
         self._client.validate_cost(symbol, cost)
         if self._ex.has.get("createMarketBuyOrderWithCost"):
-            return await self._ex.create_market_buy_order_with_cost(symbol, float(cost))
+            return await self._ex.create_market_buy_order_with_cost(symbol, float(cost), params)
         # Fallback: size the base amount from the live price, then round to precision.
         ticker = await self._ex.fetch_ticker(symbol)
         last = to_decimal(ticker.get("last") or ticker.get("close"))
@@ -85,7 +91,7 @@ class CcxtBroker:
             )
         amount = self._client.amount_to_precision(symbol, cost / last)
         self._client.validate_limits(symbol, amount, last)
-        return await self._ex.create_order(symbol, "market", "buy", float(amount))
+        return await self._ex.create_order(symbol, "market", "buy", float(amount), None, params)
 
     async def cancel_order(self, order_id: str) -> OrderResult:
         symbol = await self._symbol_for(order_id)

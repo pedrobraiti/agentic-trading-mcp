@@ -57,7 +57,7 @@ class FakeExchange:
             "filled": amount, "average": self._last, "amount": amount, "price": price,
         }
 
-    async def create_market_buy_order_with_cost(self, symbol, cost):
+    async def create_market_buy_order_with_cost(self, symbol, cost, params=None):
         self.cost_orders.append((symbol, cost))
         return {
             "id": "c1", "symbol": symbol, "side": "buy", "status": "closed",
@@ -263,18 +263,64 @@ async def test_guard_allows_spot_buy_in_sandbox():
     assert ex.cost_orders == [("BTC/USDT", 50.0)]
 
 
+def _unverified_provider(is_paper=True):
+    """Mirrors the REAL crypto probe: PAPER is derived from config, not venue-verified."""
+    async def provider():
+        return {"account_id": "binance", "is_paper": is_paper,
+                "account_type": "PAPER" if is_paper else "LIVE", "identity_verified": False}
+    return provider
+
+
+async def test_guard_unverified_identity_requires_ack_for_real_order():
+    # The Task 3 mismatch path: a sandbox label whose paper/live status the venue can't
+    # confirm. A real (non-dry-run) order must require CRYPTO_ALLOW_LIVE — so live keys hidden
+    # under a sandbox label can't move money on the dry-run flag alone.
+    guarded = _guarded(FakeExchange(), account_info_provider=_unverified_provider(),
+                       dry_run=False, allow_live=False)
+    with pytest.raises(SafetyError, match="CRYPTO_ALLOW_LIVE"):
+        await guarded.place_order(
+            OrderRequest(symbol="BTC/USDT", side=OrderSide.BUY, cash_qty=Decimal("50"))
+        )
+
+
+async def test_guard_unverified_identity_dry_run_still_allowed():
+    # Dry-run validates freely even with unverified identity — no money can move.
+    guarded = _guarded(FakeExchange(), account_info_provider=_unverified_provider(),
+                       dry_run=True, allow_live=False)
+    result = await guarded.place_order(
+        OrderRequest(symbol="BTC/USDT", side=OrderSide.BUY, cash_qty=Decimal("50"))
+    )
+    assert result.dry_run is True
+
+
+async def test_guard_unverified_identity_real_order_ok_with_ack():
+    ex = FakeExchange()
+    guarded = _guarded(ex, account_info_provider=_unverified_provider(),
+                       dry_run=False, allow_live=True)
+    result = await guarded.place_order(
+        OrderRequest(symbol="BTC/USDT", side=OrderSide.BUY, cash_qty=Decimal("50"))
+    )
+    assert result.status is OrderStatus.FILLED
+
+
 class _FakeCryptoServices:
     """Stand-in for the crypto Services that session_status reads (offline)."""
 
-    def __init__(self, settings, *, is_paper=False):
+    def __init__(self, settings, *, is_paper=False, journal=None):
+        from trading_core.journal import TradeJournal
+
         self.settings = settings
         self._is_paper = is_paper
+        # An empty/unwritten journal: read() on a missing file returns [] (no spend, none
+        # unresolved), so the posture fields compute without touching disk.
+        self.journal = journal or TradeJournal("logs/does-not-exist.jsonl")
 
     async def account_info(self) -> dict:
         return {
             "account_id": "binance",
             "is_paper": self._is_paper,
             "account_type": "PAPER" if self._is_paper else "LIVE",
+            "identity_verified": False,
         }
 
 

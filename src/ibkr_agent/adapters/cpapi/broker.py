@@ -267,7 +267,10 @@ class CpapiBroker:
             "orderType": request.order_type.value,
             "side": request.side.value,
             "tif": "DAY",
-            "cOID": self._id_factory(),
+            # Use the safety layer's cOID when present (so the journaled intent and the live
+            # order share an idempotency key the 503-retry and reconciliation match on); else
+            # generate one for standalone/preview use.
+            "cOID": request.client_order_id or self._id_factory(),
         }
         if request.cash_qty is not None:
             order["cashQty"] = float(request.cash_qty)

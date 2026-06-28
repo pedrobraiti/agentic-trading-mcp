@@ -508,6 +508,86 @@ async def test_limit_entry_bracket_not_blocked_by_market_check():
     assert len(broker.placed) == 1
 
 
+async def test_timed_out_buy_blocks_retry_beyond_duplicate_window(tmp_path):
+    # The realistic unattended failure: a buy whose dispatch errors (timeout) is retried
+    # well after the 5s duplicate window. The persistent idempotency guard must still block
+    # the resend (it could place a SECOND live order) until the first is reconciled.
+    from trading_core.journal import TradeJournal
+
+    class _TimingOutBroker(FakeBroker):
+        async def place_order(self, request):
+            self.placed.append(request)
+            raise RuntimeError("503 / timeout — fate unknown")
+
+    journal = TradeJournal(tmp_path / "t.jsonl")
+    broker = _TimingOutBroker()
+    # duplicate_window_seconds=0 turns the short window OFF, isolating the persistent
+    # idempotency guard — i.e. proving the retry is blocked even where the window can't help.
+    guarded = _guarded(broker, FakeMarketData(Decimal("10")),
+                       journal=journal, duplicate_window_seconds=0)
+
+    with pytest.raises(RuntimeError, match="timeout"):
+        await guarded.place_order(_buy("AAPL", "10"))
+    assert len(broker.placed) == 1  # the first attempt was dispatched
+
+    # A retry (fresh call, fresh cOID, outside any duplicate window) is blocked BEFORE dispatch.
+    with pytest.raises(SafetyError, match="unresolved"):
+        await guarded.place_order(_buy("AAPL", "10"))
+    assert len(broker.placed) == 1  # NO second live order
+
+
+async def test_intent_is_journaled_before_dispatch(tmp_path):
+    # Crash-window guard: the intent must hit disk BEFORE the broker call, so a crash
+    # mid-dispatch still leaves the order visible to the next run.
+    from trading_core.journal import TradeJournal
+
+    journal = TradeJournal(tmp_path / "t.jsonl")
+    seen_on_disk: dict[str, object] = {}
+
+    class _InspectingBroker(FakeBroker):
+        async def place_order(self, request):
+            # At this point (inside the broker call) the intent must already be journaled.
+            seen_on_disk["intents"] = [
+                r for r in journal.read(limit=0) if r.get("kind") == "intent"
+            ]
+            seen_on_disk["coid"] = request.client_order_id
+            return await super().place_order(request)
+
+    broker = _InspectingBroker()
+    guarded = _guarded(broker, FakeMarketData(Decimal("10")), journal=journal)
+    await guarded.place_order(_buy("AAPL", "10"))
+
+    assert len(seen_on_disk["intents"]) == 1            # intent written before dispatch
+    assert seen_on_disk["coid"] is not None             # cOID threaded into the order
+    assert seen_on_disk["intents"][0]["client_order_id"] == seen_on_disk["coid"]
+
+
+async def test_resolved_dispatch_allows_a_fresh_order(tmp_path):
+    # Once the in-flight order is reconciled, an identical new order is allowed again.
+    from trading_core.journal import TradeJournal
+
+    class _TimingOutBroker(FakeBroker):
+        async def place_order(self, request):
+            self.placed.append(request)
+            raise RuntimeError("timeout")
+
+    journal = TradeJournal(tmp_path / "t.jsonl")
+    guarded = _guarded(_TimingOutBroker(), FakeMarketData(Decimal("10")),
+                       journal=journal, duplicate_window_seconds=0)
+    with pytest.raises(RuntimeError):
+        await guarded.place_order(_buy("AAPL", "10"))
+
+    # Reconcile the orphan, then a fresh identical order goes through.
+    for row in journal.unresolved_dispatches():
+        journal.mark_resolved(row["client_order_id"], status="cancelled")
+
+    broker = FakeBroker()
+    guarded2 = _guarded(broker, FakeMarketData(Decimal("10")),
+                        journal=journal, duplicate_window_seconds=0)
+    result = await guarded2.place_order(_buy("AAPL", "10"))
+    assert result.order_id == "real-1"
+
+
 async def test_bracket_stop_loss_inverted_vs_market_blocked():
     from trading_core.domain.models import BracketRequest
 

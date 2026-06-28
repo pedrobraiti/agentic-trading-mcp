@@ -44,6 +44,7 @@ async def test_tools_are_registered():
         "cancel_order",
         "open_orders",
         "trade_history",
+        "reconcile_pending",
     }
     assert expected <= names
 
@@ -336,13 +337,64 @@ async def test_session_status_no_daily_cap_warning_when_live_off(monkeypatch):
     assert "daily_cap_warning" not in out["data"]
 
 
-async def test_close_position_cooldown_blocks_immediate_reclose(monkeypatch):
+async def test_session_status_reports_trading_posture(tmp_path, monkeypatch):
+    settings = Settings(ibkr_account_id="DU1", trading_dry_run=True,
+                        max_daily_value=Decimal("500"))
+    svc = Services(
+        settings=settings, client=None, auth=_FakeAuth(),
+        market_data=_FakeMarketData(), broker=None,
+        journal=TradeJournal(tmp_path / "t.jsonl"),
+    )
+    monkeypatch.setattr(app, "_services", svc)
+    out = await app.session_status()
+    data = out["data"]
+    assert data["dry_run"] is True
+    assert data["allowlist_active"] is False
+    assert data["remaining_daily_budget"] == "500"
+    assert data["unresolved_orders"] == []
+    assert data["trade_stops"] == []
+    assert data["safe_to_trade"] is True
+
+
+async def test_session_status_competing_is_a_trade_stop(tmp_path, monkeypatch):
+    class _CompetingAuth(_FakeAuth):
+        async def status(self) -> dict:
+            return {"authenticated": True, "connected": True, "competing": True}
+
+    svc = Services(
+        settings=Settings(ibkr_account_id="DU1"), client=None, auth=_CompetingAuth(),
+        market_data=_FakeMarketData(), broker=None,
+        journal=TradeJournal(tmp_path / "t.jsonl"),
+    )
+    monkeypatch.setattr(app, "_services", svc)
+    out = await app.session_status()
+    assert any("competing" in stop for stop in out["data"]["trade_stops"])
+    assert out["data"]["safe_to_trade"] is False
+
+
+async def test_session_status_unresolved_order_is_a_trade_stop(tmp_path, monkeypatch):
+    journal = TradeJournal(tmp_path / "t.jsonl")
+    buy = OrderRequest(symbol="AAPL", side=OrderSide.BUY, cash_qty=Decimal("10"))
+    journal.record_intent(request=buy, mode=TradingMode.PAPER, notional=Decimal("10"),
+                          client_order_id="coid-1")
+    svc = Services(
+        settings=Settings(ibkr_account_id="DU1"), client=None, auth=_FakeAuth(),
+        market_data=_FakeMarketData(), broker=None, journal=journal,
+    )
+    monkeypatch.setattr(app, "_services", svc)
+    out = await app.session_status()
+    assert len(out["data"]["unresolved_orders"]) == 1
+    assert any("unconfirmed" in stop for stop in out["data"]["trade_stops"])
+    assert out["data"]["safe_to_trade"] is False
+
+
+async def test_close_position_cooldown_blocks_immediate_reclose(tmp_path, monkeypatch):
     app._recent_closes.clear()
     market_data = _FakeMarketData()
     broker = GuardedBroker(
         _FakeInner(), market_data, mode=TradingMode.PAPER, allow_live=False,
         dry_run=False, max_order_value=Decimal("1000"), require_market_open=False,
-        journal=TradeJournal("logs/unused.jsonl"),
+        journal=TradeJournal(tmp_path / "trades.jsonl"),
     )
     svc = Services(settings=Settings(ibkr_account_id="DU1"), client=None, auth=_FakeAuth(),
                    market_data=market_data, broker=broker, journal=broker._journal)
@@ -359,7 +411,7 @@ async def test_close_position_cooldown_blocks_immediate_reclose(monkeypatch):
     app._recent_closes.clear()
 
 
-async def test_close_position_concurrent_double_is_prevented(monkeypatch):
+async def test_close_position_concurrent_double_is_prevented(tmp_path, monkeypatch):
     import asyncio
 
     app._recent_closes.clear()
@@ -374,7 +426,7 @@ async def test_close_position_concurrent_double_is_prevented(monkeypatch):
     broker = GuardedBroker(
         inner, market_data, mode=TradingMode.PAPER, allow_live=False, dry_run=False,
         max_order_value=Decimal("1000"), require_market_open=False,
-        journal=TradeJournal("logs/unused.jsonl"),
+        journal=TradeJournal(tmp_path / "trades.jsonl"),
     )
     svc = Services(settings=Settings(ibkr_account_id="DU1"), client=None, auth=_FakeAuth(),
                    market_data=market_data, broker=broker, journal=broker._journal)
@@ -387,7 +439,7 @@ async def test_close_position_concurrent_double_is_prevented(monkeypatch):
     app._recent_closes.clear()
 
 
-async def test_close_position_holds_reservation_on_indeterminate(monkeypatch):
+async def test_close_position_holds_reservation_on_indeterminate(tmp_path, monkeypatch):
     # If place_order RAISES (e.g. an indeterminate 503 that may have landed), the
     # reservation must be HELD so a retry can't double-close — never released.
     app._recent_closes.clear()
@@ -402,7 +454,7 @@ async def test_close_position_holds_reservation_on_indeterminate(monkeypatch):
     broker = GuardedBroker(
         inner, market_data, mode=TradingMode.PAPER, allow_live=False, dry_run=False,
         max_order_value=Decimal("1000"), require_market_open=False,
-        journal=TradeJournal("logs/unused.jsonl"),
+        journal=TradeJournal(tmp_path / "trades.jsonl"),
     )
     svc = Services(settings=Settings(ibkr_account_id="DU1"), client=None, auth=_FakeAuth(),
                    market_data=market_data, broker=broker, journal=broker._journal)
@@ -417,7 +469,7 @@ async def test_close_position_holds_reservation_on_indeterminate(monkeypatch):
     app._recent_closes.clear()
 
 
-async def test_close_position_cancelled_does_not_permanently_block(monkeypatch):
+async def test_close_position_cancelled_does_not_permanently_block(tmp_path, monkeypatch):
     import asyncio
     import math
 
@@ -432,7 +484,7 @@ async def test_close_position_cancelled_does_not_permanently_block(monkeypatch):
     broker = GuardedBroker(
         _CancellingInner(), market_data, mode=TradingMode.PAPER, allow_live=False,
         dry_run=False, max_order_value=Decimal("1000"), require_market_open=False,
-        journal=TradeJournal("logs/unused.jsonl"),
+        journal=TradeJournal(tmp_path / "trades.jsonl"),
     )
     svc = Services(settings=Settings(ibkr_account_id="DU1"), client=None, auth=_FakeAuth(),
                    market_data=market_data, broker=broker, journal=broker._journal)
@@ -450,7 +502,7 @@ async def test_close_position_cancelled_does_not_permanently_block(monkeypatch):
     app._recent_closes.clear()
 
 
-async def test_close_position_inflight_reservation_not_evicted(monkeypatch):
+async def test_close_position_inflight_reservation_not_evicted(tmp_path, monkeypatch):
     import asyncio
 
     app._recent_closes.clear()
@@ -468,7 +520,7 @@ async def test_close_position_inflight_reservation_not_evicted(monkeypatch):
     broker = GuardedBroker(
         inner, market_data, mode=TradingMode.PAPER, allow_live=False, dry_run=False,
         max_order_value=Decimal("1000"), require_market_open=False,
-        journal=TradeJournal("logs/unused.jsonl"),
+        journal=TradeJournal(tmp_path / "trades.jsonl"),
     )
     svc = Services(settings=Settings(ibkr_account_id="DU1"), client=None, auth=_FakeAuth(),
                    market_data=market_data, broker=broker, journal=broker._journal)
@@ -484,7 +536,7 @@ async def test_close_position_inflight_reservation_not_evicted(monkeypatch):
     app._recent_closes.clear()
 
 
-async def test_close_position_releases_cooldown_on_rejected(monkeypatch):
+async def test_close_position_releases_cooldown_on_rejected(tmp_path, monkeypatch):
     app._recent_closes.clear()
 
     class _RejectingInner(_FakeInner):
@@ -498,7 +550,7 @@ async def test_close_position_releases_cooldown_on_rejected(monkeypatch):
     broker = GuardedBroker(
         inner, market_data, mode=TradingMode.PAPER, allow_live=False, dry_run=False,
         max_order_value=Decimal("1000"), require_market_open=False,
-        journal=TradeJournal("logs/unused.jsonl"),
+        journal=TradeJournal(tmp_path / "trades.jsonl"),
     )
     svc = Services(settings=Settings(ibkr_account_id="DU1"), client=None, auth=_FakeAuth(),
                    market_data=market_data, broker=broker, journal=broker._journal)

@@ -15,6 +15,8 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from trading_core.domain.models import OrderRequest, OrderSide, OrderType
+from trading_core.posture import add_trading_posture
+from trading_core.reconcile import reconcile_pending as _reconcile
 
 from ..config import daily_cap_off_while_live
 from .services import Services, build_services
@@ -70,13 +72,15 @@ async def session_status() -> dict:
 
     Returns `authenticated`, `exchange`, `mode` (sandbox/live), `account_type`
     ("PAPER"/"LIVE") and — when live — a `warning`. Unlike IBKR (where `account_type`
-    derives from the broker's real `isPaper`), here `account_type` only echoes the
-    configured `CRYPTO_TRADING_MODE`; it is NOT independently verified against the
-    exchange. Real-money protection rests on the `CRYPTO_ALLOW_LIVE` gate, not on this
-    field. There is no gateway/login here — either the keys authenticate or they don't.
+    derives from the broker's real `isPaper`), here `account_type` only echoes the configured
+    `CRYPTO_TRADING_MODE`; it is NOT independently verified against the exchange. That is
+    surfaced as `identity_verified: false`, and because of it a real (non-dry-run) order
+    requires the explicit `CRYPTO_ALLOW_LIVE` ack — so a sandbox label hiding live keys can't
+    move real money on the dry-run flag alone.
 
-    Also reports `daily_cap_configured` (whether a cumulative daily spend cap is set) and,
-    when live trading is armed with no cap, a `daily_cap_warning` to relay to the user.
+    Posture (so an unattended caller can self-gate): `dry_run`, `allowlist_active`,
+    `daily_cap_configured`, `remaining_daily_budget`, `unresolved_orders`, `trade_stops` and an
+    advisory `safe_to_trade`. When live trading is armed with no cap, a `daily_cap_warning`.
     """
     svc = services()
     try:
@@ -92,7 +96,16 @@ async def session_status() -> dict:
                 "LIVE crypto account — orders placed here move REAL money. "
                 "Confirm symbol, side and amount with the user before sending."
             )
-        status["daily_cap_configured"] = svc.settings.max_daily_value is not None
+        elif info.get("identity_verified") is False:
+            status["identity_warning"] = (
+                "PAPER is a config label, NOT venue-verified — live keys under a sandbox label "
+                "would look like this. A real order requires CRYPTO_ALLOW_LIVE=true."
+            )
+        add_trading_posture(
+            status, journal=svc.journal, max_daily_value=svc.settings.max_daily_value,
+            dry_run=svc.settings.crypto_dry_run,
+            allowlist_active=bool(svc.settings.symbol_allowlist.strip()),
+        )
         if daily_cap_off_while_live(svc.settings):
             status["daily_cap_warning"] = (
                 "No daily spend cap set (MAX_DAILY_VALUE) - only the per-order cap applies."
@@ -107,6 +120,23 @@ async def session_status() -> dict:
                 "error": str(exc),
             }
         )
+
+
+@mcp.tool()
+async def reconcile_pending(resolve_missing: bool = False) -> dict:
+    """Reconcile dispatched-but-unconfirmed orders against the exchange's open orders.
+
+    After a timeout/crash an order may have landed without its outcome journaled, so the
+    safety layer BLOCKS an identical resend until it is reconciled. This clears that block:
+    orders found resting on the exchange are marked resolved; ones not found stay blocked (they
+    may have filled — resending blind would double them). Set `resolve_missing=true` to also
+    clear the not-found ones AFTER verifying via positions/trade_history that they didn't fill.
+    """
+    svc = services()
+    try:
+        return _ok(await _reconcile(svc.broker, svc.journal, resolve_missing=resolve_missing))
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
 
 
 @mcp.tool()

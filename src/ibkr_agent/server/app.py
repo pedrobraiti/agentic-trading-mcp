@@ -23,6 +23,8 @@ from trading_core.domain.models import (
     OrderType,
     TrailingType,
 )
+from trading_core.posture import add_trading_posture
+from trading_core.reconcile import reconcile_pending as _reconcile
 
 from ..config import daily_cap_off_while_live
 from ..keepalive import _alert
@@ -95,15 +97,17 @@ def _err(exc: Exception) -> dict:
 
 @mcp.tool()
 async def session_status() -> dict:
-    """Session status AND which account is live: authenticated/connected/competing plus
-    `account_id`, `account_type` ("LIVE"/"PAPER") and `is_paper`.
+    """Trading posture — "am I safe to trade right now?" — plus which account is live.
 
-    `account_type` is the ground truth from IBKR (`isPaper`), NOT the configured
-    `IBKR_TRADING_MODE` label — always check it before trading so you never mistake a
-    real-money account for paper. When the account is LIVE a `warning` is included.
+    Identity: `authenticated`/`connected`/`competing`, `account_id`, `account_type`
+    ("LIVE"/"PAPER", the ground truth from IBKR's `isPaper`, NOT the `IBKR_TRADING_MODE`
+    label) and `is_paper`. A LIVE account includes a `warning`.
 
-    Also reports `daily_cap_configured` (whether a cumulative daily spend cap is set) and,
-    when live trading is armed with no cap, a `daily_cap_warning` to relay to the user.
+    Posture (so an unattended caller can self-gate): `dry_run`, `allowlist_active`,
+    `daily_cap_configured`, `remaining_daily_budget` (when a cap is set), `unresolved_orders`
+    (dispatched-but-unconfirmed orders that must be reconciled before resending), `trade_stops`
+    (active reasons NOT to trade — a competing session, or unresolved in-flight orders) and an
+    advisory `safe_to_trade`. When live trading is armed with no cap, a `daily_cap_warning`.
     """
     svc = services()
     try:
@@ -116,12 +120,34 @@ async def session_status() -> dict:
                     "LIVE account — orders placed here move REAL money. "
                     "Confirm symbol, side and amount with the user before sending."
                 )
-        status["daily_cap_configured"] = svc.settings.max_daily_value is not None
+        add_trading_posture(
+            status, journal=svc.journal, max_daily_value=svc.settings.max_daily_value,
+            dry_run=svc.settings.trading_dry_run,
+            allowlist_active=bool(svc.settings.symbol_allowlist.strip()),
+        )
         if daily_cap_off_while_live(svc.settings):
             status["daily_cap_warning"] = (
                 "No daily spend cap set (MAX_DAILY_VALUE) - only the per-order cap applies."
             )
         return _ok(status)
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool()
+async def reconcile_pending(resolve_missing: bool = False) -> dict:
+    """Reconcile dispatched-but-unconfirmed orders against IBKR's open orders.
+
+    After a timeout/crash an order may have landed without its outcome journaled, so the
+    safety layer BLOCKS an identical resend until it is reconciled. This clears that block:
+    orders found resting on IBKR are marked resolved; ones not found stay blocked (they may
+    have filled — resending blind would double them). Set `resolve_missing=true` to also clear
+    the not-found ones AFTER you've verified via positions/trade_history that they didn't fill.
+    """
+    svc = services()
+    try:
+        await svc.auth.ensure_session()
+        return _ok(await _reconcile(svc.broker, svc.journal, resolve_missing=resolve_missing))
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 

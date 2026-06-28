@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
 
@@ -75,6 +76,7 @@ class GuardedBroker:
         live_env_var: str = "TRADING_ALLOW_LIVE",
         mode_env_var: str = "IBKR_TRADING_MODE",
         account_env_var: str = "IBKR_ACCOUNT_ID",
+        id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
     ):
         self._inner = inner
         self._market_data = market_data
@@ -96,6 +98,7 @@ class GuardedBroker:
         self._live_env_var = live_env_var
         self._mode_env_var = mode_env_var
         self._account_env_var = account_env_var
+        self._id_factory = id_factory
         # Last account identity that passed every check — used as a fallback so a transient
         # failure reading the account doesn't trap an exit (see _verify_account).
         self._verified_identity: dict | None = None
@@ -118,6 +121,7 @@ class GuardedBroker:
     async def _place_order_locked(self, request: OrderRequest) -> OrderResult:
         notional: Decimal | None = None
         sent = False
+        coid: str | None = None
         try:
             notional = await self._run_guards(request)
             if self._dry_run:
@@ -128,14 +132,22 @@ class GuardedBroker:
                     dry_run=True,
                     message=f"dry-run: order validated, NOT sent (notional ~US${notional}).",
                 )
-            else:
-                sent = True  # dispatched to the broker — may fill even if this call errors
-                result = await self._inner.place_order(request)
+                self._record(request, notional, result=result, sent=False)
+                return result
 
-            self._record(request, notional, result=result, sent=sent)
+            # Thread a client order id (cOID) and journal the INTENT to dispatch BEFORE the
+            # broker call. If we crash between the dispatch and recording the outcome, this
+            # intent is already durable on disk, so the order is visible to the spend cap and
+            # the idempotency guard on the next run (it would otherwise be invisible).
+            coid = request.client_order_id or self._id_factory()
+            request = request.model_copy(update={"client_order_id": coid})
+            self._record_intent(request, notional, coid)
+            sent = True  # dispatched to the broker — may fill even if this call errors
+            result = await self._inner.place_order(request)
+            self._record(request, notional, result=result, sent=sent, client_order_id=coid)
             return result
         except Exception as exc:  # noqa: BLE001 - record the failed attempt, then re-raise
-            self._record(request, notional, error=exc, sent=sent)
+            self._record(request, notional, error=exc, sent=sent, client_order_id=coid)
             raise
 
     async def place_bracket(self, bracket: BracketRequest) -> list[OrderResult]:
@@ -148,6 +160,7 @@ class GuardedBroker:
         entry = bracket.entry
         notional: Decimal | None = None
         sent = False
+        coid: str | None = None
         try:
             notional = await self._run_guards(entry)
             await self._check_bracket_exits(bracket)
@@ -161,14 +174,22 @@ class GuardedBroker:
                         message=f"dry-run: bracket validated, NOT sent (notional ~US${notional}).",
                     )
                 ]
-            else:
-                sent = True
-                results = await self._inner.place_bracket(bracket)
+                self._record(entry, notional, result=results[0], sent=False)
+                return results
 
-            self._record(entry, notional, result=results[0] if results else None, sent=sent)
+            coid = entry.client_order_id or self._id_factory()
+            entry = entry.model_copy(update={"client_order_id": coid})
+            bracket = bracket.model_copy(update={"entry": entry})
+            self._record_intent(entry, notional, coid)
+            sent = True
+            results = await self._inner.place_bracket(bracket)
+            self._record(
+                entry, notional, result=results[0] if results else None, sent=sent,
+                client_order_id=coid,
+            )
             return results
         except Exception as exc:  # noqa: BLE001 - record the failed attempt, then re-raise
-            self._record(entry, notional, error=exc, sent=sent)
+            self._record(entry, notional, error=exc, sent=sent, client_order_id=coid)
             raise
 
     async def _run_guards(self, request: OrderRequest) -> Decimal | None:
@@ -220,6 +241,19 @@ class GuardedBroker:
                 f"Duplicate order blocked: an identical {request.side.value} "
                 f"{request.symbol.upper()} was just placed "
                 f"(within {self._duplicate_window_seconds:g}s)."
+            )
+
+        # Persistent idempotency (across processes / beyond the duplicate window): refuse to
+        # resend an identical intent whose previous dispatch was never confirmed (timeout /
+        # crash). This closes the retry-loop gap the short duplicate window misses — a 30-60s
+        # backoff would otherwise place a SECOND live order. The block lifts only once the
+        # in-flight order's fate is reconciled (order_status / open_orders / reconcile_pending).
+        if self._journal is not None and self._journal.has_unresolved_dispatch(request):
+            raise SafetyError(
+                f"In-flight order unresolved: a previous {request.side.value} "
+                f"{request.symbol.upper()} was dispatched but never confirmed (timeout or "
+                "crash), so resending now could place a DUPLICATE live order. Reconcile it "
+                "first (order_status / open_orders / reconcile_pending), then retry."
             )
 
         self._check_daily_limit(request, notional)
@@ -292,9 +326,31 @@ class GuardedBroker:
                 f"is on a PAPER account. Set {self._mode_env_var}=paper to match, then retry."
             )
 
+        # When the venue can't INDEPENDENTLY confirm paper-vs-live (e.g. a crypto exchange has
+        # no authenticated testnet/mainnet flag), the "PAPER" verdict is only a config label —
+        # live keys under a sandbox label would read as paper. Don't let the dry-run flag be
+        # the sole barrier: a real (non-dry-run) send then needs the explicit live ack too, so
+        # a silent key mismatch can't move real money. This catches a config FAILURE; the user
+        # setting the ack is the deliberate opt-in. Venue-verified identities (IBKR) skip this.
+        if (
+            info.get("identity_verified", True) is False
+            and not self._dry_run
+            and not self._allow_live
+        ):
+            raise SafetyError(
+                f"{self._venue} can't independently confirm this is a PAPER account, so its "
+                f"paper/live status is unverified. A real order therefore requires "
+                f"{self._live_env_var}=true as an explicit acknowledgement (a sandbox label "
+                "with live keys would otherwise look like paper). Keep dry-run on, or set the "
+                "ack only if you accept these keys may move real money."
+            )
+
         # Identity confirmed — remember it so a later transient read failure can fall back
         # to it instead of trapping an exit.
-        self._verified_identity = {"account_id": account_id, "is_paper": is_paper}
+        self._verified_identity = {
+            "account_id": account_id, "is_paper": is_paper,
+            "identity_verified": info.get("identity_verified", True),
+        }
 
     async def _is_covering_short(self, request: OrderRequest) -> bool:
         """True if this BUY (by quantity) merely covers an existing SHORT — i.e. an exit.
@@ -478,6 +534,7 @@ class GuardedBroker:
         result: OrderResult | None = None,
         error: Exception | None = None,
         sent: bool = False,
+        client_order_id: str | None = None,
     ) -> None:
         if self._journal is None:
             return
@@ -490,9 +547,25 @@ class GuardedBroker:
                 result=result,
                 error=error,
                 sent=sent,
+                client_order_id=client_order_id,
             )
         except Exception:  # noqa: BLE001 - journaling must never break trading
             logger.warning("Failed to journal an order attempt", exc_info=True)
+
+    def _record_intent(
+        self, request: OrderRequest, notional: Decimal | None, client_order_id: str
+    ) -> None:
+        if self._journal is None:
+            return
+        try:
+            self._journal.record_intent(
+                request=request,
+                mode=self._mode,
+                notional=notional,
+                client_order_id=client_order_id,
+            )
+        except Exception:  # noqa: BLE001 - journaling must never break trading
+            logger.warning("Failed to journal an order intent", exc_info=True)
 
     async def _notional(self, request: OrderRequest) -> Decimal | None:
         """Estimated order value in US$. For cashQty it's direct; for quantity it uses the quote."""
