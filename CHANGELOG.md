@@ -5,6 +5,22 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-01
+
+### Added
+- **`stop_order` on the crypto server — exchange-NATIVE stops (16th crypto tool).** Until now
+  the only crypto protection was a skill-monitored soft stop, which fires only while an agent
+  is running — an honest but real gap for unattended positions. The new tool places a native
+  trigger order via CCXT's unified `triggerPrice`, so the stop RESTS ON THE EXCHANGE and fires
+  with nobody home. Mirrors the IBKR `stop_order` signature (`symbol, side, quantity,
+  stop_price, limit_price?`) and routes through the same safety stack (account ground-truth,
+  inverted-stop check, duplicate/idempotency guards). Fail-closed capability handling: most
+  spot APIs (binance included) offer only stop-LIMIT, so a bare stop-market is refused with
+  guidance to pass `limit_price` (never silently converted); an exchange with no native stop
+  support is refused with the soft-stop fallback named. Stops are sized by base `quantity`
+  only. The gap-risk of a stop-limit (a violent gap can jump the limit) is documented in the
+  tool itself.
+
 ## [0.5.3] - 2026-07-01
 
 ### Fixed

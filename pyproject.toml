@@ -1,6 +1,6 @@
 [project]
 name = "agentic-trading-mcp"
-version = "0.5.3"
+version = "0.6.0"
 description = "Monorepo of MCP execution servers for an AI agent: Interactive Brokers (stocks, fractional via cashQty) and crypto exchanges (CCXT, spot), over one shared safety core."
 readme = "README.md"
 requires-python = ">=3.12"

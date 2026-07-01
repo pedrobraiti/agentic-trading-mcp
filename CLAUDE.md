@@ -177,10 +177,13 @@ and `ccxt` behind one interface.
 `warning`), `market_status` (always open), `get_quote`/`get_quotes`, `account_summary`,
 `positions`, `portfolio`, `buy` (`cash_amount` in the quote ccy via
 `createMarketBuyOrderWithCost`, **or** `quantity` in the base; market or LIMIT),
-`sell` (by `quantity`), `close_position` (sells 100% of the base balance),
+`sell` (by `quantity`), `stop_order` (**exchange-native** trigger order via CCXT's unified
+`triggerPrice` — rests on the exchange and fires with no agent running; most spot APIs only
+offer stop-LIMIT, so pass `limit_price`; refused cleanly where the exchange has no native
+stops), `close_position` (sells 100% of the base balance),
 `order_status`, `cancel_order`, `open_orders`, `trade_history`, `reconcile_pending` (clears the
 resend-block on a dispatched-but-unconfirmed order, same as IBKR). **Not** offered on crypto:
-brackets, stops, trailing stops, `preview_order` (no exchange whatif).
+brackets, trailing stops, `preview_order` (no exchange whatif).
 
 ### Crypto safety specifics
 

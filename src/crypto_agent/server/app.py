@@ -234,6 +234,40 @@ async def sell(symbol: str, quantity: float, limit_price: float | None = None) -
 
 
 @mcp.tool()
+async def stop_order(
+    symbol: str,
+    side: str,
+    quantity: float,
+    stop_price: float,
+    limit_price: float | None = None,
+) -> dict:
+    """Place an EXCHANGE-NATIVE stop (trigger) order — it rests on the exchange and fires even
+    when no agent is running (unlike a skill-monitored soft stop).
+
+    `side` is "BUY" or "SELL" (a stop-loss on a long spot position is a SELL below the market).
+    Sized by `quantity` (base asset). Pass `limit_price` to make it a stop-LIMIT — REQUIRED on
+    most spot exchanges (binance spot has no stop-market): for a SELL stop set it at or slightly
+    below `stop_price`, knowing a limit may not fill through a violent gap. Goes through the
+    same safety gates as any order, including the inverted-stop check.
+    """
+    svc = services()
+    try:
+        order_type = OrderType.STOP_LIMIT if limit_price is not None else OrderType.STOP
+        request = OrderRequest(
+            symbol=svc.client.normalize_symbol(symbol),
+            side=OrderSide(side.upper()),
+            order_type=order_type,
+            quantity=Decimal(str(quantity)),
+            stop_price=Decimal(str(stop_price)),
+            limit_price=Decimal(str(limit_price)) if limit_price is not None else None,
+        )
+        result = await svc.broker.place_order(request)
+        return _ok(result.model_dump(mode="json"))
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool()
 async def close_position(symbol: str) -> dict:
     """Closes 100% of a base asset's position by selling its full balance."""
     svc = services()

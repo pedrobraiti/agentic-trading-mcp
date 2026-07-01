@@ -21,11 +21,13 @@ class FakeExchange:
     """Minimal CCXT-async-shaped double recording the calls the adapter makes."""
 
     def __init__(self, *, balance=None, last=100.0, has_cost=True):
+        self.id = "fakex"
         self.markets = _MARKETS
-        self.has = {"createMarketBuyOrderWithCost": has_cost}
+        self.has = {"createMarketBuyOrderWithCost": has_cost, "createStopLimitOrder": True}
         self._balance = balance or {"free": {"USDT": 1000.0}, "total": {"USDT": 1000.0}}
         self._last = last
         self.created: list[tuple] = []
+        self.created_params: list[dict] = []
         self.cost_orders: list[tuple] = []
         self.cancelled: list[tuple] = []
 
@@ -52,6 +54,7 @@ class FakeExchange:
 
     async def create_order(self, symbol, type_, side, amount, price=None, params=None):
         self.created.append((symbol, type_, side, amount, price))
+        self.created_params.append(params or {})
         return {
             "id": "o1", "symbol": symbol, "side": side, "status": "closed",
             "filled": amount, "average": self._last, "amount": amount, "price": price,
@@ -137,6 +140,67 @@ async def test_sell_by_quantity_limit():
         )
     )
     assert ex.created == [("BTC/USDT", "limit", "sell", 0.1, 105.0)]
+
+
+# --- native stops -------------------------------------------------------------------
+
+async def test_stop_limit_sell_places_native_trigger_order():
+    ex = FakeExchange()
+    broker = _broker(ex)
+    result = await broker.place_order(
+        OrderRequest(
+            symbol="BTC/USDT", side=OrderSide.SELL, quantity=Decimal("0.1"),
+            order_type=OrderType.STOP_LIMIT,
+            stop_price=Decimal("96"), limit_price=Decimal("95"),
+        )
+    )
+    assert ex.created == [("BTC/USDT", "limit", "sell", 0.1, 95.0)]
+    assert ex.created_params[-1]["triggerPrice"] == 96.0
+    assert result.status is OrderStatus.FILLED  # fake echoes 'closed'; shape is what matters
+
+
+async def test_stop_market_refused_when_exchange_lacks_it():
+    # binance spot: createStopMarketOrder is False — a bare STOP (market on trigger) must be
+    # refused with guidance to pass limit_price, never silently converted.
+    ex = FakeExchange()
+    broker = _broker(ex)
+    with pytest.raises(CryptoExchangeError, match="limit_price"):
+        await broker.place_order(
+            OrderRequest(
+                symbol="BTC/USDT", side=OrderSide.SELL, quantity=Decimal("0.1"),
+                order_type=OrderType.STOP, stop_price=Decimal("96"),
+            )
+        )
+    assert ex.created == []
+
+
+async def test_stop_market_allowed_when_exchange_supports_it():
+    ex = FakeExchange()
+    ex.has["createStopMarketOrder"] = True
+    broker = _broker(ex)
+    await broker.place_order(
+        OrderRequest(
+            symbol="BTC/USDT", side=OrderSide.SELL, quantity=Decimal("0.1"),
+            order_type=OrderType.STOP, stop_price=Decimal("96"),
+        )
+    )
+    assert ex.created == [("BTC/USDT", "market", "sell", 0.1, None)]
+    assert ex.created_params[-1]["triggerPrice"] == 96.0
+
+
+async def test_stop_limit_refused_when_exchange_has_no_stop_support():
+    ex = FakeExchange()
+    ex.has["createStopLimitOrder"] = False
+    broker = _broker(ex)
+    with pytest.raises(CryptoExchangeError, match="soft stop"):
+        await broker.place_order(
+            OrderRequest(
+                symbol="BTC/USDT", side=OrderSide.SELL, quantity=Decimal("0.1"),
+                order_type=OrderType.STOP_LIMIT,
+                stop_price=Decimal("96"), limit_price=Decimal("95"),
+            )
+        )
+    assert ex.created == []
 
 
 async def test_buy_below_min_notional_is_blocked():

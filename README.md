@@ -62,9 +62,12 @@ own tools, registered separately — and only share code.
 Crypto is here because it removes IBKR's structural friction: a **persistent API key**
 (no gateway, no daily browser login, no tickle), a **24/7** market, and CCXT behind one
 interface for ~100 exchanges. The tools **mirror the IBKR names** (`session_status`,
-`get_quote`, `buy`, `sell`, `close_position`, `open_orders`, …) so one skill can drive both
-venues uniformly. Buy-by-value mirrors IBKR's `cashQty` via CCXT's
-`createMarketBuyOrderWithCost`. **Spot-only** by default.
+`get_quote`, `buy`, `sell`, `stop_order`, `close_position`, `open_orders`, …) so one skill
+can drive both venues uniformly. Buy-by-value mirrors IBKR's `cashQty` via CCXT's
+`createMarketBuyOrderWithCost`. `stop_order` places an **exchange-native trigger order**
+(CCXT unified `triggerPrice`) that rests on the exchange and fires with no agent running —
+most spot APIs (binance included) only offer stop-LIMIT, so pass `limit_price`; where the
+exchange has no native stops the tool refuses cleanly. **Spot-only** by default.
 
 ```bash
 # register the crypto server (separate from ibkr)

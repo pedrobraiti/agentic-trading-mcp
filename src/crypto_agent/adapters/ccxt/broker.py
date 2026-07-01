@@ -1,8 +1,11 @@
-"""Order execution via CCXT (spot): market/limit buys and sells, cancel, open orders.
+"""Order execution via CCXT (spot): market/limit buys and sells, native stops, cancel, open orders.
 
 Buy-by-value (the crypto analogue of IBKR's cashQty) prefers the exchange-native
 ``createMarketBuyOrderWithCost`` and falls back to ``cost / price`` rounded to the
-market's precision. Brackets/stops/previews are not offered on this venue.
+market's precision. Stops are EXCHANGE-NATIVE trigger orders (CCXT's unified
+``triggerPrice``) where the exchange supports them — a resting stop survives the skill
+not running, unlike the old skill-monitored soft stop. Brackets/previews are not
+offered on this venue.
 """
 
 from __future__ import annotations
@@ -48,10 +51,15 @@ class CcxtBroker:
     async def place_order(self, request: OrderRequest) -> OrderResult:
         await self._client.ensure_markets()
         symbol = self._client.normalize_symbol(request.symbol)
-        if request.order_type not in (OrderType.MARKET, OrderType.LIMIT):
+        if request.order_type not in (
+            OrderType.MARKET,
+            OrderType.LIMIT,
+            OrderType.STOP,
+            OrderType.STOP_LIMIT,
+        ):
             raise CryptoExchangeError(
-                "The crypto venue supports MARKET and LIMIT orders only "
-                "(no native stop/trailing/bracket)."
+                "The crypto venue supports MARKET, LIMIT and STOP/STOP_LIMIT orders only "
+                "(no native trailing/bracket)."
             )
         side = request.side.value.lower()
         # Pass the safety layer's cOID to the exchange as a clientOrderId (CCXT unifies this
@@ -59,7 +67,9 @@ class CcxtBroker:
         # what lets a timed-out dispatch be reconciled against the venue's open orders.
         params = {"clientOrderId": request.client_order_id} if request.client_order_id else {}
 
-        if request.cash_qty is not None:
+        if request.order_type in (OrderType.STOP, OrderType.STOP_LIMIT):
+            order = await self._place_stop(symbol, side, request, params)
+        elif request.cash_qty is not None:
             order = await self._buy_by_value(symbol, request.cash_qty, params)
         else:
             amount = self._client.amount_to_precision(symbol, request.quantity or Decimal(0))
@@ -75,6 +85,53 @@ class CcxtBroker:
                 params,
             )
         return self._to_result(order, fallback_symbol=symbol, fallback_side=request.side)
+
+    async def _place_stop(
+        self, symbol: str, side: str, request: OrderRequest, params: dict
+    ) -> dict:
+        """Exchange-native stop via CCXT's unified ``triggerPrice``. Fail-closed on capability.
+
+        A stop with a ``limit_price`` becomes a stop-LIMIT (a resting trigger that places a
+        limit order when ``stop_price`` trades); without one it would be a stop-MARKET, which
+        many spot APIs (binance spot included) do NOT offer — that case is refused with
+        guidance instead of silently substituting a different order type. Stops are sized by
+        base ``quantity`` only (a trigger order cannot be sized by quote cost).
+        """
+        if request.cash_qty is not None:
+            raise CryptoExchangeError(
+                "Stop orders are sized by base 'quantity', not by quote-currency value."
+            )
+        has = self._ex.has
+        if request.limit_price is None:
+            if not has.get("createStopMarketOrder"):
+                raise CryptoExchangeError(
+                    f"{self._ex.id} spot does not support stop-MARKET orders; pass "
+                    "'limit_price' to place a stop-LIMIT instead (for a SELL stop, set it "
+                    "at or slightly below 'stop_price' — mind that a limit may not fill "
+                    "through a violent gap)."
+                )
+        elif not (
+            has.get("createStopLimitOrder")
+            or has.get("createStopOrder")
+            or has.get("createTriggerOrder")
+        ):
+            raise CryptoExchangeError(
+                f"{self._ex.id} does not support exchange-native stop orders; the only "
+                "protection available here is a skill-monitored soft stop."
+            )
+        amount = self._client.amount_to_precision(symbol, request.quantity or Decimal(0))
+        reference_price = request.limit_price or request.stop_price
+        self._client.validate_limits(symbol, amount, reference_price)
+        order_type = "limit" if request.limit_price is not None else "market"
+        stop_params = {**params, "triggerPrice": float(request.stop_price)}
+        return await self._ex.create_order(
+            symbol,
+            order_type,
+            side,
+            float(amount),
+            float(request.limit_price) if request.limit_price is not None else None,
+            stop_params,
+        )
 
     async def _buy_by_value(self, symbol: str, cost: Decimal, params: dict | None = None) -> dict:
         """Market BUY for a quote-currency amount (cashQty analogue)."""
