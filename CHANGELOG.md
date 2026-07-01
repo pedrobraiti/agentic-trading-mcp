@@ -5,6 +5,20 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-07-01
+
+### Fixed
+- **A rejected/cancelled order's own intent record no longer blocks an identical retry**
+  (manager code-review finding, LOW, over-block direction). Since 0.5.0 every dispatch journals
+  an intent (status `pending`, `sent`) before the broker call; `has_recent_duplicate` judged
+  each journal line in isolation, so after the gateway rejected an order its outcome line was
+  correctly ignored but its still-`pending` intent line kept tripping the duplicate window —
+  contradicting the guard's own contract ("rejected/cancelled moved no money, a retry must be
+  allowed"). A cOID's fate now belongs to the group: the last non-intent status written for a
+  cOID (outcome, then possibly a reconcile resolution) decides. Fail-safe preserved: an
+  in-flight intent (no outcome yet) still blocks, and a partial-fill cancel resolved as
+  `filled` by reconcile re-blocks (the resolution outranks the earlier `cancelled` outcome).
+
 ## [0.5.2] - 2026-06-28
 
 ### Fixed

@@ -143,6 +143,52 @@ def test_rejected_order_does_not_block_retry(tmp_path):
     assert journal.has_recent_duplicate(buy, 30) is False
 
 
+def test_rejected_order_with_intent_record_does_not_block_retry(tmp_path):
+    # The REAL dispatch flow journals an intent (status `pending`, sent) BEFORE the outcome.
+    # A rejected order's fate belongs to the cOID group: its own still-`pending` intent line
+    # must not resurrect the duplicate block after the gateway said "nothing happened".
+    journal = TradeJournal(tmp_path / "trades.jsonl")
+    buy = OrderRequest(symbol="AAPL", side=OrderSide.BUY, cash_qty=Decimal("10"))
+    journal.record_intent(request=buy, mode=TradingMode.LIVE, notional=Decimal("10"),
+                          client_order_id="coid-rej")
+    rejected = OrderResult(order_id="9", status=OrderStatus.REJECTED, symbol="AAPL",
+                           side=OrderSide.BUY)
+    journal.record(request=buy, mode=TradingMode.LIVE, dry_run=False,
+                   notional=Decimal("10"), result=rejected, sent=True,
+                   client_order_id="coid-rej")
+
+    assert journal.has_recent_duplicate(buy, 30) is False
+
+
+def test_in_flight_intent_still_blocks_duplicate(tmp_path):
+    # An intent with NO outcome yet (dispatch in flight) has no fate — it must keep blocking.
+    journal = TradeJournal(tmp_path / "trades.jsonl")
+    buy = OrderRequest(symbol="AAPL", side=OrderSide.BUY, cash_qty=Decimal("10"))
+    journal.record_intent(request=buy, mode=TradingMode.LIVE, notional=Decimal("10"),
+                          client_order_id="coid-flight")
+
+    assert journal.has_recent_duplicate(buy, 30) is True
+
+
+def test_partial_fill_resolution_outranks_cancelled_outcome_for_duplicates(tmp_path):
+    # A cancel that PARTIALLY filled is resolved as `filled` by reconcile (money moved).
+    # The last word on the cOID wins: the earlier `cancelled` outcome must not free the
+    # duplicate block once the resolution says the order filled (fail-safe, over-block).
+    journal = TradeJournal(tmp_path / "trades.jsonl")
+    buy = OrderRequest(symbol="AAPL", side=OrderSide.BUY, cash_qty=Decimal("10"))
+    journal.record_intent(request=buy, mode=TradingMode.LIVE, notional=Decimal("10"),
+                          client_order_id="coid-part")
+    cancelled = OrderResult(order_id="9", status=OrderStatus.CANCELLED, symbol="AAPL",
+                            side=OrderSide.BUY)
+    journal.record(request=buy, mode=TradingMode.LIVE, dry_run=False,
+                   notional=Decimal("10"), result=cancelled, sent=True,
+                   client_order_id="coid-part")
+    assert journal.has_recent_duplicate(buy, 30) is False  # zero-fill cancel frees...
+    journal.mark_resolved("coid-part", status="filled", order_id="9",
+                          message="reconciled: partial fill under cancel")
+    assert journal.has_recent_duplicate(buy, 30) is True  # ...but a confirmed fill re-blocks
+
+
 def test_has_recent_duplicate(tmp_path):
     journal = TradeJournal(tmp_path / "trades.jsonl")
     request = OrderRequest(symbol="AAPL", side=OrderSide.BUY, cash_qty=Decimal("10"))

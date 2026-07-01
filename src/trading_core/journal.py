@@ -246,7 +246,22 @@ class TradeJournal:
             return False
         cutoff = datetime.now(self._tz) - timedelta(seconds=window_seconds)
         fingerprint = _request_fingerprint(request)
-        for entry in reversed(self.read(limit=200)):
+        entries = self.read(limit=200)
+        # A cOID's fate belongs to the GROUP, not to each line: the intent record of a
+        # rejected order still says `pending`, so judging lines in isolation would let a
+        # dead order's own intent block its retry. The journal is append-only, so the last
+        # status written for a cOID (outcome, then possibly a reconcile resolution — e.g. a
+        # partial-fill cancel resolved as `filled`) is its current fate; intents don't count
+        # as a fate (an in-flight order must keep blocking).
+        fate: dict[str, str] = {}
+        for entry in entries:
+            coid, status = entry.get("client_order_id"), entry.get("status")
+            if coid and status and entry.get("kind") != "intent":
+                fate[coid] = status
+        no_money_coids = {
+            coid for coid, status in fate.items() if status in _NO_MONEY_STATUSES
+        }
+        for entry in reversed(entries):
             if entry.get("kind") == "resolution":
                 continue
             # An order counts as a possible duplicate if it was dispatched to the broker
@@ -257,6 +272,8 @@ class TradeJournal:
             if not (entry.get("sent") or entry.get("order_id")):
                 continue
             if entry.get("status") in _NO_MONEY_STATUSES:
+                continue
+            if entry.get("client_order_id") in no_money_coids:
                 continue
             if _entry_fingerprint(entry) == fingerprint:
                 try:
