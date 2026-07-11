@@ -5,6 +5,53 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-11
+
+Review round on the crypto execution path: one severe latent break on the default exchange,
+two behaviors that fought the "explicit order = faithful contract" philosophy, and a value-cap
+undercount — each fixed with a regression test that reproduces the bug first. The round's
+meta-lesson is baked into the suite: the crypto fake now mirrors the REAL exchange's failure
+modes (binance's symbol-less `fetch_open_orders` raise, sells rejected above the free balance)
+— an unfaithful fake is how the severe one stayed hidden through 184 green tests.
+
+### Fixed
+- **Crypto `open_orders`/`reconcile_pending` were broken on binance — the default exchange.**
+  `get_live_orders` calls CCXT's `fetch_open_orders` with no symbol; binance ships with
+  `warnOnFetchOpenOrdersWithoutSymbol: true` and RAISES `ExchangeError` on that call (verified
+  in ccxt 4.5.60). That killed `open_orders`, `reconcile_pending` (the idempotency unblock
+  path), and the post-restart cancel of a resting native stop — none of which the suite caught
+  because the fake exchange happily returned orders. The client now acknowledges the option
+  off at construction (it is a rate-limit advisory, irrelevant for one account), and the fake
+  reproduces binance's raise so this class of bug can't hide again.
+- **`close_position` (crypto) no longer bounces off a balance locked by a resting stop.** A
+  native stop-limit SELL locks the base balance (`free` < `total`), so closing sold the total
+  against a locked balance → "insufficient balance". The close now compares free vs total,
+  cancels the resting SELL orders on that pair first (closing makes them orphans anyway),
+  reports what was cancelled (`cancelled_orders`), re-reads the ground truth, and sells the
+  full balance. If a cancel fails it fails CLOSED: sells only the free part and reports the
+  locked remainder (`locked_quantity`) with instructions — never fires a sell that must bounce.
+- **A deliberate limit ladder is no longer blocked as a duplicate.** The duplicate-window
+  fingerprint ignored price, so 3 same-size limits at different prices — an explicit, deliberate
+  pattern — tripped the guard (friction with "explicit order = faithful contract").
+  `limit_price`/`stop_price` are now part of the duplicate identity (and journaled). The
+  persistent idempotency guard (`has_unresolved_dispatch`) stays price-AGNOSTIC on purpose: a
+  re-priced retry of a dispatched-but-unconfirmed order is still blocked — the first one may
+  have filled, so a new price doesn't make the resend safe.
+- **A marketable BUY LIMIT no longer undercounts the value cap.** The notional was sized from
+  `last` even when `limit_price > last` (where the order actually fills at ~its limit). It now
+  uses the worse of the two — strictly conservative, can over-block, never under-count.
+
+### Added
+- **Crypto `order_status`/`cancel_order` resolve orders beyond the current session.** The
+  order-id → symbol resolution (CCXT requires the pair) fell back only on the venue's OPEN
+  orders, so an already-filled order — or any order after a server restart — was "Unknown
+  order". Two additive fixes: the local journal (which records every order's symbol and ids)
+  is now a read-only resolution fallback, and both tools accept an optional `symbol` parameter
+  that bypasses resolution entirely (backward-compatible; the IBKR tools are unchanged).
+- **The crypto close cooldown has its own test coverage** (immediate re-close blocked,
+  concurrent double-close prevented, reservation held on an indeterminate dispatch, released
+  on a rejected one) — the logic mirrored IBKR's but was only tested there. 206 tests total.
+
 ## [0.6.0] - 2026-07-01
 
 ### Added

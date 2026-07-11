@@ -21,6 +21,8 @@
 
 The investment *decision* (what/when to buy or sell) stays with you and your skill's prompt — e.g. [**Vizier**](https://github.com/pedrobraiti/vizier-trading-skill), the decision-making brain of this stack. This project delivers only the **reliable trading plumbing** — with safety guards on by default.
 
+**Part of a three-piece stack** — brain, senses, hands: [**Vizier**](https://github.com/pedrobraiti/vizier-trading-skill) (the `/vizier` skill) decides, [**Scout**](https://github.com/pedrobraiti/market-research-mcp) researches (62 keyless market-data tools: stocks, crypto, macro, SEC filings), and **Valet** (this repo) executes. Each piece works standalone; together they close the research → decision → execution loop.
+
 > ⚠️ **Not financial advice.** Runs against a *paper* account by default; *live* trading requires explicit opt-in. Use at your own risk.
 
 > **What to expect.** The **crypto** server is the low-friction path: just a persistent API key, 24/7, no gateway — it can run unattended. The **IBKR** server needs a funded **IBKR Pro** account and a **manual browser login about once a day** (IBKR offers no OAuth for retail — an IBKR constraint, not ours), so the stock side isn't fully hands-off. First-time setup is roughly **30–60 min** per venue.
@@ -31,7 +33,7 @@ Hexagonal (ports & adapters). The agent talks only to the MCP tools; the safety 
 
 ```mermaid
 flowchart LR
-    A["AI agent<br/>(/invest skill)"] -->|MCP tools| B["MCP server<br/>(FastMCP)"]
+    A["AI agent<br/>(/vizier skill)"] -->|MCP tools| B["MCP server<br/>(FastMCP)"]
     B --> C["GuardedBroker<br/>(safety guards)"]
     B --> D["MarketData"]
     C --> E["CPAPI adapters"]
@@ -71,7 +73,8 @@ exchange has no native stops the tool refuses cleanly. **Spot-only** by default.
 
 ```bash
 # register the crypto server (separate from ibkr)
-claude mcp add crypto -- /path/to/.venv/Scripts/python.exe -m crypto_agent.server.app
+# Windows:      claude mcp add crypto -- /path/to/.venv/Scripts/python.exe -m crypto_agent.server.app
+# Linux/macOS:  claude mcp add crypto -- /path/to/.venv/bin/python -m crypto_agent.server.app
 python -m crypto_agent.healthcheck   # exchange, mode, balance, a quote
 ```
 
@@ -146,7 +149,8 @@ Keep the gateway running while you use Valet; the session needs a fresh login ab
 1. With the gateway running and logged in, register the MCP server with Claude Code:
 
    ```bash
-   claude mcp add ibkr -- /path/to/.venv/Scripts/python.exe -m ibkr_agent.server.app
+   # Windows:      claude mcp add ibkr -- /path/to/.venv/Scripts/python.exe -m ibkr_agent.server.app
+   # Linux/macOS:  claude mcp add ibkr -- /path/to/.venv/bin/python -m ibkr_agent.server.app
    ```
 
    (or run it directly to test: `python -m ibkr_agent.server.app`)
@@ -249,7 +253,7 @@ The keep-alive can also POST to an optional **webhook** (`REAUTH_WEBHOOK_URL`, e
 ## Development
 
 ```bash
-python -m pytest -q          # tests
+python -m pytest -q          # 206 tests, all offline (brokers/exchanges are faked)
 python -m ruff check .       # lint
 ```
 

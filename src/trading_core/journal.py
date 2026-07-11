@@ -51,9 +51,12 @@ def _request_size(request: OrderRequest) -> str:
 
 
 def _request_fingerprint(request: OrderRequest) -> tuple[str, str, str, str]:
-    """Identity of an order *intent* — symbol/side/type/size. A retry of the same intent
-    produces the same fingerprint (even though it gets a fresh cOID), which is what lets the
-    idempotency guard catch a resend of a dispatched-but-unconfirmed order."""
+    """Identity of an order *intent* — symbol/side/type/size, deliberately price-AGNOSTIC.
+
+    Used by the idempotency guard (``has_unresolved_dispatch``): a retry of the same intent
+    produces the same fingerprint (even though it gets a fresh cOID), and a RE-PRICED retry
+    of a dispatched-but-unconfirmed order must still be caught — the first order may have
+    filled, so a new price doesn't make the resend safe."""
     return (
         request.symbol.upper(),
         request.side.value,
@@ -65,6 +68,28 @@ def _request_fingerprint(request: OrderRequest) -> tuple[str, str, str, str]:
 def _entry_fingerprint(entry: dict) -> tuple[str, str, str, str]:
     size = entry.get("cash_qty") or entry.get("quantity")
     return (entry.get("symbol"), entry.get("side"), entry.get("order_type"), str(size))
+
+
+def _request_duplicate_fingerprint(request: OrderRequest) -> tuple[str, ...]:
+    """Identity for the short duplicate WINDOW — the intent fingerprint plus the prices.
+
+    Unlike the idempotency guard, the duplicate window judges CONFIRMED recent orders, where
+    same-size-different-price is a deliberate pattern (a limit ladder), not an accident — so
+    two limits at different prices must not block each other; only a truly identical resend is
+    the timeout/retry failure this window exists for."""
+    return (
+        *_request_fingerprint(request),
+        str(request.limit_price),
+        str(request.stop_price),
+    )
+
+
+def _entry_duplicate_fingerprint(entry: dict) -> tuple[str, ...]:
+    return (
+        *_entry_fingerprint(entry),
+        str(entry.get("limit_price")),
+        str(entry.get("stop_price")),
+    )
 
 
 class TradeJournal:
@@ -99,6 +124,8 @@ class TradeJournal:
             "order_type": request.order_type.value,
             "cash_qty": str(request.cash_qty) if request.cash_qty is not None else None,
             "quantity": str(request.quantity) if request.quantity is not None else None,
+            "limit_price": str(request.limit_price) if request.limit_price is not None else None,
+            "stop_price": str(request.stop_price) if request.stop_price is not None else None,
             "notional": str(notional) if notional is not None else None,
             "dry_run": result.dry_run if result is not None else dry_run,
             # `sent` = dispatched to the broker (it may have filled even if no order_id
@@ -241,11 +268,13 @@ class TradeJournal:
         return total
 
     def has_recent_duplicate(self, request: OrderRequest, window_seconds: float) -> bool:
-        """True if an identical order (symbol/side/type/size) was placed within the window."""
+        """True if an identical order (symbol/side/type/size/prices) was placed within the
+        window. Price is part of the identity here: a ladder of same-size limits at different
+        prices is deliberate, not a duplicate (see ``_request_duplicate_fingerprint``)."""
         if window_seconds <= 0:
             return False
         cutoff = datetime.now(self._tz) - timedelta(seconds=window_seconds)
-        fingerprint = _request_fingerprint(request)
+        fingerprint = _request_duplicate_fingerprint(request)
         entries = self.read(limit=200)
         # A cOID's fate belongs to the GROUP, not to each line: the intent record of a
         # rejected order still says `pending`, so judging lines in isolation would let a
@@ -275,7 +304,7 @@ class TradeJournal:
                 continue
             if entry.get("client_order_id") in no_money_coids:
                 continue
-            if _entry_fingerprint(entry) == fingerprint:
+            if _entry_duplicate_fingerprint(entry) == fingerprint:
                 try:
                     when = datetime.fromisoformat(entry["timestamp"])
                 except (ValueError, KeyError):

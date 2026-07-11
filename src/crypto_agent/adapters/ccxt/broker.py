@@ -21,6 +21,7 @@ from trading_core.domain.models import (
     OrderStatus,
     OrderType,
 )
+from trading_core.journal import TradeJournal
 
 from .client import CcxtClient, CryptoExchangeError, to_decimal
 
@@ -38,11 +39,15 @@ _STATUS_MAP = {
 class CcxtBroker:
     """Implements ``BrokerPort`` on top of a CCXT exchange (spot, no leverage)."""
 
-    def __init__(self, client: CcxtClient):
+    def __init__(self, client: CcxtClient, *, journal: TradeJournal | None = None):
         self._client = client
         # order_id → symbol, so cancel/status work without the caller passing a symbol
         # (CCXT needs the symbol; the IBKR-shaped tools only pass an id).
         self._symbol_by_id: dict[str, str] = {}
+        # Read-only fallback for that resolution: the journal records every placed order's
+        # symbol alongside its ids, so a closed order or one from a previous process (both
+        # invisible to the in-memory cache and to open orders) can still be looked up.
+        self._journal = journal
 
     @property
     def _ex(self):
@@ -150,15 +155,19 @@ class CcxtBroker:
         self._client.validate_limits(symbol, amount, last)
         return await self._ex.create_order(symbol, "market", "buy", float(amount), None, params)
 
-    async def cancel_order(self, order_id: str) -> OrderResult:
-        symbol = await self._symbol_for(order_id)
-        order = await self._ex.cancel_order(order_id, symbol)
-        return self._to_result(order, fallback_symbol=symbol, fallback_side=None)
+    async def cancel_order(self, order_id: str, symbol: str | None = None) -> OrderResult:
+        resolved = (
+            self._client.normalize_symbol(symbol) if symbol else await self._symbol_for(order_id)
+        )
+        order = await self._ex.cancel_order(order_id, resolved)
+        return self._to_result(order, fallback_symbol=resolved, fallback_side=None)
 
-    async def get_order_status(self, order_id: str) -> OrderResult:
-        symbol = await self._symbol_for(order_id)
-        order = await self._ex.fetch_order(order_id, symbol)
-        return self._to_result(order, fallback_symbol=symbol, fallback_side=None)
+    async def get_order_status(self, order_id: str, symbol: str | None = None) -> OrderResult:
+        resolved = (
+            self._client.normalize_symbol(symbol) if symbol else await self._symbol_for(order_id)
+        )
+        order = await self._ex.fetch_order(order_id, resolved)
+        return self._to_result(order, fallback_symbol=resolved, fallback_side=None)
 
     async def get_live_orders(self) -> list[OrderResult]:
         await self._client.ensure_markets()
@@ -185,11 +194,31 @@ class CcxtBroker:
             await self.get_live_orders()  # repopulate the cache from the exchange
             symbol = self._symbol_by_id.get(order_id)
         if symbol is None:
+            symbol = self._symbol_from_journal(order_id)
+        if symbol is None:
             raise CryptoExchangeError(
-                f"Unknown order '{order_id}': it is not among this session's open orders. "
-                "Use open_orders to list active orders."
+                f"Unknown order '{order_id}': it is not among the open orders and the local "
+                "journal has no record of it. Pass the 'symbol' argument (e.g. 'BTC/USDT') "
+                "to look it up directly, or use open_orders to list active orders."
             )
         return symbol
+
+    def _symbol_from_journal(self, order_id: str) -> str | None:
+        """Resolve an order's symbol from the local trade journal (closed orders, restarts).
+
+        The in-memory cache dies with the process and the exchange only lists OPEN orders,
+        so an already-filled order — or one placed by a previous session — is otherwise
+        unresolvable. The journal records the symbol with both the venue ``order_id`` and
+        our ``client_order_id``; accept either (the caller may only have kept the cOID).
+        """
+        if self._journal is None:
+            return None
+        for entry in reversed(self._journal.read(limit=0)):
+            if order_id in (entry.get("order_id"), entry.get("client_order_id")):
+                symbol = entry.get("symbol")
+                if symbol:
+                    return str(symbol)
+        return None
 
     def _to_result(
         self,

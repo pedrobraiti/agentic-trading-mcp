@@ -504,10 +504,16 @@ class GuardedBroker:
         # Read-only estimate (margin/commission/warnings); no guard needed.
         return await self._inner.preview_order(request)
 
-    async def get_order_status(self, order_id: str) -> OrderResult:
+    async def get_order_status(self, order_id: str, symbol: str | None = None) -> OrderResult:
+        # `symbol` is forwarded only when given: venues that need it to look an order up
+        # (CCXT) accept it; venues that don't (IBKR) never see the extra argument.
+        if symbol is not None:
+            return await self._inner.get_order_status(order_id, symbol=symbol)
         return await self._inner.get_order_status(order_id)
 
-    async def cancel_order(self, order_id: str) -> OrderResult:
+    async def cancel_order(self, order_id: str, symbol: str | None = None) -> OrderResult:
+        if symbol is not None:
+            return await self._inner.cancel_order(order_id, symbol=symbol)
         return await self._inner.cancel_order(order_id)
 
     async def get_live_orders(self) -> list[OrderResult]:
@@ -581,4 +587,13 @@ class GuardedBroker:
                 f"No usable price for {request.symbol} (got {price}): cannot validate the "
                 "order's value limit."
             )
+        # A BUY LIMIT priced ABOVE the market (a marketable limit) fills at ~its limit, so
+        # sizing the spend by `last` would undercount it past the cap. Use the worse of the
+        # two — strictly conservative: it can over-block, never under-count.
+        if (
+            request.side is OrderSide.BUY
+            and request.limit_price is not None
+            and request.limit_price > price
+        ):
+            price = request.limit_price
         return price * (request.quantity or Decimal(0))

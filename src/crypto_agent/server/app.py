@@ -267,9 +267,50 @@ async def stop_order(
         return _err(exc)
 
 
+async def _release_locked_balance(svc: Services, normalized: str) -> dict:
+    """Cancel the resting SELL orders (e.g. a native stop) that lock part of the base balance.
+
+    Closing the position makes any resting protective order orphaned anyway, so cancelling
+    them first is coherent — and it is what unlocks the balance so 100% can be sold. Returns
+    a report of what was cancelled and what failed; it never raises (a failed cancel is a
+    result, handled fail-closed by the caller: sell only what is free).
+    """
+    cancelled: list[dict] = []
+    failures: list[dict] = []
+    try:
+        live = await svc.broker.get_live_orders()
+    except Exception as exc:  # noqa: BLE001 - can't even list; the caller sells the free part
+        failures.append({"order_id": None, "error": f"could not list open orders: {exc}"})
+    else:
+        for order in live:
+            # Only SELL orders on this pair lock the BASE balance (a resting BUY locks the
+            # quote currency instead, and is an independent intent — leave it alone).
+            if (
+                order.symbol != normalized
+                or order.side is not OrderSide.SELL
+                or not order.order_id
+            ):
+                continue
+            try:
+                outcome = await svc.broker.cancel_order(order.order_id, symbol=order.symbol)
+                cancelled.append({"order_id": order.order_id, "status": outcome.status.value})
+            except Exception as exc:  # noqa: BLE001
+                failures.append({"order_id": order.order_id, "error": str(exc)})
+    report: dict = {"cancelled_orders": cancelled}
+    if failures:
+        report["cancel_failures"] = failures
+    return report
+
+
 @mcp.tool()
 async def close_position(symbol: str) -> dict:
-    """Closes 100% of a base asset's position by selling its full balance."""
+    """Closes 100% of a base asset's position by selling its full balance.
+
+    If part of the balance is locked by resting SELL orders (e.g. an untriggered native
+    stop), those orders are cancelled first — a closed position would orphan them anyway —
+    and the result reports them under `cancelled_orders`. If a cancel fails, only the free
+    (unlocked) part is sold and the locked remainder is reported with instructions.
+    """
     svc = services()
     try:
         normalized = svc.client.normalize_symbol(symbol)
@@ -295,14 +336,45 @@ async def close_position(symbol: str) -> dict:
                 return _ok(
                     {"closed": False, "reason": f"No open position in {normalized}."}
                 )
-            request = OrderRequest(symbol=normalized, side=OrderSide.SELL, quantity=held)
+            quantity = held
+            report: dict = {}
+            free = await svc.market_data.free_quantity(symbol)
+            if free is not None and free < held:
+                report = await _release_locked_balance(svc, normalized)
+                # Re-read the ground truth instead of assuming the cancels unlocked
+                # everything; fail-closed, sell only what the exchange says is free now.
+                refreshed = await svc.market_data.free_quantity(symbol)
+                free = refreshed if refreshed is not None else free
+                quantity = held if free >= held else free
+                if quantity <= 0:
+                    _recent_closes.pop(normalized, None)
+                    return _ok(
+                        {
+                            "closed": False,
+                            "reason": (
+                                f"The whole {normalized} balance is locked by open orders "
+                                "that could not be cancelled — nothing is free to sell. "
+                                "Cancel them (open_orders / cancel_order), then close again."
+                            ),
+                            **report,
+                        }
+                    )
+                if quantity < held:
+                    report["locked_quantity"] = str(held - quantity)
+                    report["warning"] = (
+                        f"{held - quantity} of {normalized} is still locked by open orders "
+                        "that could not be cancelled; selling only the free "
+                        f"{quantity}. Cancel the remaining orders (open_orders / "
+                        "cancel_order), then run close_position again."
+                    )
+            request = OrderRequest(symbol=normalized, side=OrderSide.SELL, quantity=quantity)
             order_attempted = True
             result = await svc.broker.place_order(request)
             if result.dry_run or result.status.value in ("rejected", "cancelled"):
                 _recent_closes.pop(normalized, None)
             else:
                 _recent_closes[normalized] = time.monotonic()
-            return _ok(result.model_dump(mode="json"))
+            return _ok({**result.model_dump(mode="json"), **report})
         finally:
             if _recent_closes.get(normalized) is _INFLIGHT:
                 if order_attempted:
@@ -314,22 +386,32 @@ async def close_position(symbol: str) -> dict:
 
 
 @mcp.tool()
-async def order_status(order_id: str) -> dict:
-    """Status of a placed order by its id (state, filled quantity, average price)."""
+async def order_status(order_id: str, symbol: str | None = None) -> dict:
+    """Status of a placed order by its id (state, filled quantity, average price).
+
+    The pair is normally resolved automatically (open orders, then the local journal).
+    Pass `symbol` (e.g. "BTC/USDT" or just "BTC") to skip that resolution — needed for an
+    order this server never placed nor saw open (CCXT requires the pair to look one up).
+    """
     svc = services()
     try:
-        result = await svc.broker.get_order_status(order_id)
+        result = await svc.broker.get_order_status(order_id, symbol=symbol)
         return _ok(result.model_dump(mode="json"))
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
 
 @mcp.tool()
-async def cancel_order(order_id: str) -> dict:
-    """Cancels an open order by its id."""
+async def cancel_order(order_id: str, symbol: str | None = None) -> dict:
+    """Cancels an open order by its id.
+
+    The pair is normally resolved automatically (open orders, then the local journal).
+    Pass `symbol` (e.g. "BTC/USDT" or just "BTC") to skip that resolution — needed for an
+    order this server never placed nor saw open (CCXT requires the pair to cancel).
+    """
     svc = services()
     try:
-        result = await svc.broker.cancel_order(order_id)
+        result = await svc.broker.cancel_order(order_id, symbol=symbol)
         return _ok(result.model_dump(mode="json"))
     except Exception as exc:  # noqa: BLE001
         return _err(exc)

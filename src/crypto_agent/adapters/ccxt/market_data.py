@@ -83,6 +83,18 @@ class CcxtMarketData:
 
     async def held_quantity(self, symbol: str) -> Decimal | None:
         """Total base-asset balance for ``symbol`` (spot is never negative), or None."""
+        return await self._base_balance(symbol, "total")
+
+    async def free_quantity(self, symbol: str) -> Decimal | None:
+        """Free (sellable NOW) base-asset balance for ``symbol``, or None.
+
+        The exchange moves the balance a resting order holds (e.g. an untriggered stop-limit
+        SELL) out of ``free`` while it stays in ``total`` — so ``free < total`` means part of
+        the position is locked by open orders and a sell of the total would be rejected.
+        """
+        return await self._base_balance(symbol, "free")
+
+    async def _base_balance(self, symbol: str, bucket: str) -> Decimal | None:
         await self._client.ensure_markets()
         normalized = self._client.normalize_symbol(symbol)
         try:
@@ -90,8 +102,8 @@ class CcxtMarketData:
         except Exception:  # noqa: BLE001 - unknown symbol → can't confirm holdings
             return None
         balance = await self._ex.fetch_balance()
-        total = to_decimal((balance.get("total") or {}).get(base))
-        return total if total is not None else Decimal(0)
+        amount = to_decimal((balance.get(bucket) or {}).get(base))
+        return amount if amount is not None else Decimal(0)
 
     async def invalidate_positions(self) -> None:
         # fetch_balance is always a fresh REST read; nothing to invalidate.

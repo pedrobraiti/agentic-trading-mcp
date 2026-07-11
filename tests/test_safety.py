@@ -8,6 +8,7 @@ from trading_core.domain.models import (
     OrderResult,
     OrderSide,
     OrderStatus,
+    OrderType,
     Position,
     Quote,
     TradingMode,
@@ -602,4 +603,32 @@ async def test_bracket_stop_loss_inverted_vs_market_blocked():
     )
     with pytest.raises(SafetyError, match="trigger immediately"):
         await guarded.place_bracket(bracket)
+    assert broker.placed == []
+
+
+# --- V5: LIMIT BUY notional must not undercount a marketable limit ---------------------
+
+async def test_marketable_buy_limit_notional_uses_the_limit_price():
+    # REGRESSION: a BUY LIMIT priced ABOVE the market fills at ~its limit, but the value
+    # cap was sized from `last` — undercounting the spend past MAX_ORDER_VALUE.
+    broker = FakeBroker()
+    guarded = _guarded(broker, FakeMarketData(Decimal("10")))  # last=10 → 10*10=100 ≤ cap
+    with pytest.raises(SafetyError, match="exceeds"):
+        await guarded.place_order(OrderRequest(
+            symbol="AAPL", side=OrderSide.BUY, quantity=Decimal("10"),
+            order_type=OrderType.LIMIT, limit_price=Decimal("15"),  # 15*10=150 > 100
+        ))
+    assert broker.placed == []
+
+
+async def test_buy_limit_below_market_keeps_pricing_at_market():
+    # max(limit, last) is STRICTLY conservative: a dip-buy limit below the market keeps
+    # the previous last-based sizing (never smaller than before the fix).
+    broker = FakeBroker()
+    guarded = _guarded(broker, FakeMarketData(Decimal("10")), max_order_value=Decimal("60"))
+    with pytest.raises(SafetyError, match="exceeds"):
+        await guarded.place_order(OrderRequest(
+            symbol="AAPL", side=OrderSide.BUY, quantity=Decimal("10"),
+            order_type=OrderType.LIMIT, limit_price=Decimal("5"),  # 5*10=50 ≤ 60, but last→100
+        ))
     assert broker.placed == []

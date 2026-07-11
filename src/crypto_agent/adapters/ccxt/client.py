@@ -60,6 +60,14 @@ class CcxtClient:
             if sandbox:
                 # testnet where the exchange provides one = our paper-first mode.
                 self.exchange.set_sandbox_mode(True)
+        # binance (the default exchange) ships with warnOnFetchOpenOrdersWithoutSymbol=True
+        # and RAISES ExchangeError on a symbol-less fetch_open_orders — which would break
+        # get_live_orders, reconcile_pending and the cancel of a resting stop after a restart.
+        # It is a rate-limit advisory (heavier weight per call), irrelevant for one account
+        # polling occasionally, so acknowledge it once here for whatever exchange is used.
+        options = getattr(self.exchange, "options", None)
+        if isinstance(options, dict):
+            options["warnOnFetchOpenOrdersWithoutSymbol"] = False
         self.exchange_id = exchange_id
         self.sandbox = sandbox
         self.quote_currency = quote_currency.strip().upper()

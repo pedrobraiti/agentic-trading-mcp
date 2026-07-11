@@ -189,6 +189,48 @@ def test_partial_fill_resolution_outranks_cancelled_outcome_for_duplicates(tmp_p
     assert journal.has_recent_duplicate(buy, 30) is True  # ...but a confirmed fill re-blocks
 
 
+def test_limit_ladder_at_different_prices_is_not_a_duplicate(tmp_path):
+    # V3 regression: a deliberate ladder (same size, different limit prices) was blocked as
+    # a duplicate because the fingerprint ignored price — attriting "explicit order =
+    # faithful contract". Price is part of the duplicate identity now.
+    journal = TradeJournal(tmp_path / "trades.jsonl")
+    rung1 = OrderRequest(symbol="AAPL", side=OrderSide.BUY, quantity=Decimal("5"),
+                         order_type=OrderType.LIMIT, limit_price=Decimal("100"))
+    journal.record(request=rung1, mode=TradingMode.LIVE, dry_run=False,
+                   notional=Decimal("500"), result=PLACED, sent=True)
+
+    rung2 = rung1.model_copy(update={"limit_price": Decimal("99")})
+    assert journal.has_recent_duplicate(rung2, 30) is False  # a rung, not a duplicate
+    assert journal.has_recent_duplicate(rung1, 30) is True   # the identical resend still is
+
+
+def test_moved_stop_price_is_not_a_duplicate(tmp_path):
+    journal = TradeJournal(tmp_path / "trades.jsonl")
+    stop = OrderRequest(symbol="AAPL", side=OrderSide.SELL, quantity=Decimal("5"),
+                        order_type=OrderType.STOP, stop_price=Decimal("40"))
+    journal.record(request=stop, mode=TradingMode.LIVE, dry_run=False,
+                   notional=None, result=PLACED, sent=True)
+
+    moved = stop.model_copy(update={"stop_price": Decimal("39")})
+    assert journal.has_recent_duplicate(moved, 30) is False
+    assert journal.has_recent_duplicate(stop, 30) is True
+
+
+def test_repriced_retry_of_unconfirmed_dispatch_is_still_blocked(tmp_path):
+    # The idempotency guard stays price-AGNOSTIC on purpose: the first (unconfirmed) limit
+    # may have filled, so re-pricing the retry does not make the resend safe.
+    journal = TradeJournal(tmp_path / "t.jsonl")
+    limit = OrderRequest(symbol="AAPL", side=OrderSide.BUY, quantity=Decimal("5"),
+                         order_type=OrderType.LIMIT, limit_price=Decimal("100"))
+    journal.record_intent(request=limit, mode=TradingMode.LIVE, notional=Decimal("500"),
+                          client_order_id="coid-lim")
+    journal.record(request=limit, mode=TradingMode.LIVE, dry_run=False, notional=Decimal("500"),
+                   error=RuntimeError("timeout"), sent=True, client_order_id="coid-lim")
+
+    repriced = limit.model_copy(update={"limit_price": Decimal("101")})
+    assert journal.has_unresolved_dispatch(repriced) is True
+
+
 def test_has_recent_duplicate(tmp_path):
     journal = TradeJournal(tmp_path / "trades.jsonl")
     request = OrderRequest(symbol="AAPL", side=OrderSide.BUY, cash_qty=Decimal("10"))

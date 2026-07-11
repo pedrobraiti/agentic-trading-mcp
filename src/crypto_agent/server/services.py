@@ -74,7 +74,9 @@ def build_services(settings: CryptoSettings | None = None) -> Services:
     )
 
     guarded = GuardedBroker(
-        CcxtBroker(client),
+        # The journal is the broker's fallback to resolve an order id → symbol (CCXT needs
+        # the pair) for orders that are no longer open or were placed by a previous process.
+        CcxtBroker(client, journal=journal),
         market_data,
         mode=settings.trading_mode,
         allow_live=settings.crypto_allow_live,
