@@ -131,7 +131,10 @@ capability surface. Every tool returns an `{"ok": bool, "data"/"error": ...}` en
 
 **After placing**
 - `order_status(order_id)` — state, filled quantity, average price (use it to confirm a
-  fill; `positions` lags right after a trade).
+  fill; `positions` lags right after a trade). **`filled_quantity` is always SHARES**; a
+  `cash_amount` order also reports `filled_cash` (US$ spent) and `is_cash_quantity`. Size a
+  protective stop from the SHARE count — never from the dollars. If `quantity_is_estimate` is
+  true (a partial cash fill), read `positions` for the exact size instead.
 - `wait_for_fill(order_id, timeout_seconds?)` — poll until it fills (or is cancelled/
   rejected), so you don't orchestrate the retry yourself (timeout capped at 120s).
 - `open_orders` — active orders. `cancel_order(order_id)` — cancel one.

@@ -429,3 +429,60 @@ belongs with the P8 live-gateway validation of IBKR's cOID dedup, not a blind of
 (correctness + no false refusal), and make the remaining race an explicit, documented
 deployment constraint rather than papering it with platform-specific locking we can't test
 offline in the highest-stakes path.
+
+## ADR-017 — `filled_quantity` is SHARES, always; a cash order's dollars go in `filled_cash`
+
+**Context.** A live US$2 BUY of AAPL (`buy(AAPL, cash_amount=2)` → IBKR `cashQty`) filled
+**0.0063 shares @ 317.25** and came back reporting `filled_quantity: 2.0`. IBKR's CPAPI reports
+the cumulative fill of a **cash-quantity** order in **DOLLARS**, in the *same field* it uses for
+**SHARES** on a share-sized order, with **no flag** to tell them apart:
+
+```
+order status:  "cum_fill": "2.0",       "total_size": "0.0063", "total_cash_quantity": "2.0"
+open orders:   "filledQuantity": 2.0,   "totalSize": 0.0063,    "totalCashSize": 2.0
+```
+
+Both mappers passed that number straight into `OrderResult.filled_quantity`. Downstream, the
+Vizier skill sizes the protective stop from `filled_quantity` and records it as the position
+size: it would have placed a **SELL STOP for 2 shares against a 0.0063-share position** — a
+~317x oversell (a naked short) — and poisoned its thesis ledger with a bogus quantity. Only a
+real fill exposed it: every fixture and fake in the suite reported cash orders in *shares*, so
+206 green tests were green against a lie.
+
+**Decision 1 — the domain guarantees the unit.** `OrderResult.filled_quantity` is **always in
+shares / base units, never cash**. The adapter converts; the venue is not trusted to be
+consistent. The cash side gets its own fields: `filled_cash` (US$ actually spent/collected,
+`None` when the venue doesn't report it) and `is_cash_quantity` (the order was sized in cash).
+The tell in the payload is the presence of a cash size (`total_cash_quantity` / `totalCashSize`);
+the true share count is `total_size` / `totalSize`. Both are surfaced through every MCP tool
+that returns an order.
+
+**Decision 2 — a PARTIAL cash fill reports an ESTIMATE, explicitly flagged; never a fake exact.**
+On a **fully filled** cash order, `total_size` **is** the executed share count (verified live: it
+matched the resulting position exactly) → reported as exact. On a **partial** fill it is not:
+`total_size` is the *order's* size, and the executed share count is simply **absent from the
+payload** — IBKR reports the progress of a cash order in dollars (`filledQuantity` +
+`remainingQuantity` = `totalCashSize`). The options were (a) invent a number, (b) return `None`,
+(c) derive and flag. We derive `filled_cash / average_price`, **floor it to IBKR's 4-decimal
+fractional-share precision**, and set `quantity_is_estimate: true` (with the caveat spelled out
+in `message`, since an LLM caller reads prose). Flooring is deliberate: an *over*-stated fill
+would size an exit above the real position (the naked-short direction), while an under-stated one
+is merely conservative. With no usable average price we report `filled_quantity: null` — **unknown
+beats invented**. The exact number always exists in `positions`; the flag tells the caller to go
+read it rather than trust a derived one.
+
+**Decision 3 — reconcile counts `filled_cash` as money moved.** ADR-016 keyed "did money move?"
+on `filled_quantity > 0`. With Decision 2 a partial cash fill can carry a `None` share count while
+real dollars were spent, which would read as "no fill" and wrongly FREE the daily budget (the
+over-spend direction). `_resolution_status` now treats **either** a positive share fill **or** a
+positive `filled_cash` as money moved.
+
+**Also fixed here (same code, same blind spot):** the `open_orders` mapper dropped `avgPrice`
+entirely — `avg_price` came back null even though IBKR sent `"317.25"`.
+
+**Why.** Two lessons, both paid for in real money. (i) A field name is not a unit: at the boundary
+of a venue that overloads one field with two units, the adapter's job is to *normalize*, and the
+domain model's job is to make the invariant explicit enough that a downstream skill can size a
+stop from it without asking. (ii) **A fake that is kinder than the venue is a liar** — the same
+lesson as v0.7.0's binance `fetch_open_orders`. The fixtures now carry the *actual* live payloads,
+cash orders included, so this class of bug cannot hide behind a green suite again.

@@ -240,6 +240,10 @@ async def buy(
     Omit `limit_price` for a market order. Pass `limit_price` for a LIMIT order —
     LIMIT requires `quantity` (cashQty is market-only). A limit order may surface a
     confirmation IBKR hasn't mapped yet; if so it is blocked (safe) until allow-listed.
+
+    A `cash_amount` buy comes back with `is_cash_quantity: true`. Its fill is reported in
+    SHARES in `filled_quantity` and in US$ in `filled_cash` (IBKR itself reports both in the
+    same field — see `order_status`); size any protective stop from the SHARE count.
     """
     return await _place(OrderSide.BUY, symbol, cash_amount, quantity, limit_price)
 
@@ -481,6 +485,10 @@ async def order_status(order_id: str) -> dict:
 
     Use this after `buy`/`sell` to confirm whether the order actually filled —
     `positions` is eventually-consistent and lags right after a trade.
+
+    Units: `filled_quantity` is ALWAYS in SHARES, `filled_cash` is the US$ spent (set only on
+    a `cash_amount` order). If `quantity_is_estimate` is true the share count was derived from
+    a partial cash fill — do NOT size an exit from it; read `positions` for the exact size.
     """
     svc = services()
     try:
@@ -506,6 +514,9 @@ async def wait_for_fill(order_id: str, timeout_seconds: float = 30.0) -> dict:
     working when time ran out. `timeout_seconds` is capped at 120. Note: an `inactive`
     result usually means the order was rejected/killed, but IBKR also uses it for an
     order parked until the market opens — so confirm intent before assuming it's dead.
+
+    Same unit contract as `order_status`: `filled_quantity` in SHARES, `filled_cash` in US$,
+    and `quantity_is_estimate` true when the share count was derived from a partial cash fill.
     """
     svc = services()
     try:
@@ -538,7 +549,10 @@ async def cancel_order(order_id: str) -> dict:
 
 @mcp.tool()
 async def open_orders() -> dict:
-    """Lists the active orders (live orders) in the account."""
+    """Lists the active orders (live orders) in the account.
+
+    Same unit contract as `order_status`: `filled_quantity` in SHARES, `filled_cash` in US$.
+    """
     svc = services()
     try:
         await svc.auth.ensure_session()

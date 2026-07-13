@@ -155,13 +155,48 @@ class BracketRequest(BaseModel):
 
 
 class OrderResult(BaseModel):
-    """Result of submitting an order to the broker."""
+    """Result of submitting an order to the broker.
+
+    **``filled_quantity`` is ALWAYS in shares / base units — never a cash amount.** The venue
+    cannot be trusted to hold that line: IBKR's CPAPI reports the cumulative fill of a
+    cash-quantity order (``cashQty``) in DOLLARS, in the very same field that carries SHARES on
+    a share-sized order, with no flag to tell them apart (ADR-017, caught on a live fill). It is
+    the adapter's job to convert; a caller sizing a protective stop from this number must be
+    able to trust the unit. The cash side is reported separately in ``filled_cash``.
+    """
 
     order_id: str | None = None
     status: OrderStatus = OrderStatus.UNKNOWN
     symbol: str
     side: OrderSide
-    filled_quantity: Decimal | None = None
+    filled_quantity: Decimal | None = Field(
+        default=None,
+        description=(
+            "Cumulative fill in SHARES / base units (never cash). None when the venue does "
+            "not report enough to know it — see 'quantity_is_estimate'."
+        ),
+    )
+    filled_cash: Decimal | None = Field(
+        default=None,
+        description=(
+            "Cash actually spent/collected on the fill, in the quote currency. None when the "
+            "venue does not report it (e.g. an IBKR share-sized order)."
+        ),
+    )
+    is_cash_quantity: bool = Field(
+        default=False,
+        description=(
+            "The order was sized in cash (IBKR cashQty / crypto buy-by-value), not in shares."
+        ),
+    )
+    quantity_is_estimate: bool = Field(
+        default=False,
+        description=(
+            "'filled_quantity' was DERIVED (filled_cash / avg_price), not reported by the "
+            "venue — a partial fill of a cash-sized order. Do NOT size an exit from it; read "
+            "the position for the exact share count."
+        ),
+    )
     avg_price: Decimal | None = None
     message: str | None = None
     dry_run: bool = False

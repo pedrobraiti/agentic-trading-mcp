@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Awaitable, Callable
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from trading_core.domain.models import (
     BracketRequest,
@@ -332,12 +332,16 @@ class CpapiBroker:
 
     def _parse_ack(self, response: object, request: OrderRequest) -> OrderResult:
         ack = response[0] if isinstance(response, list) and response else response
+        # The ack carries no fill yet, but we KNOW from the request whether this order is
+        # cash-sized — flag it here so a caller polling order_status is already primed for it.
+        is_cash_order = request.cash_qty is not None
         if isinstance(ack, dict) and ack.get("order_id"):
             return OrderResult(
                 order_id=str(ack["order_id"]),
                 status=_map_status(ack.get("order_status")),
                 symbol=request.symbol.upper(),
                 side=request.side,
+                is_cash_quantity=is_cash_order,
                 message=ack.get("text"),
                 raw=ack,
             )
@@ -345,6 +349,7 @@ class CpapiBroker:
             status=OrderStatus.REJECTED,
             symbol=request.symbol.upper(),
             side=request.side,
+            is_cash_quantity=is_cash_order,
             message=f"Unexpected response from the CPAPI: {ack}",
             raw=ack if isinstance(ack, dict) else None,
         )
@@ -424,14 +429,123 @@ def _clean_warning(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# ---------------------------------------------------------------------------
+# Fill units — the cashQty trap (ADR-017)
+#
+# The CPAPI reports the cumulative fill of a CASH-QUANTITY order (one sized in USD via
+# `cashQty`) in DOLLARS, in the very same field it uses for SHARES on a share-sized order,
+# with no flag to distinguish them. Caught on a live US$2 fill: `cum_fill: "2.0"` /
+# `filledQuantity: 2.0` while only 0.0063 shares were actually bought. Mapping that straight
+# into `filled_quantity` hands a caller a share count 317x too large — enough to size a
+# protective stop into a naked short. The adapter must therefore translate, always.
+#
+# The tells in the payload (both verified live):
+#   total_cash_quantity / totalCashSize → the order's cash size; its presence IS the marker
+#                                         of a cash-quantity order
+#   total_size / totalSize             → the order's size in SHARES
+#   cum_fill / filledQuantity          → cumulative fill: DOLLARS if cash-sized, else SHARES
+# ---------------------------------------------------------------------------
+
+# IBKR reports fractional shares to 4 decimals (seen in both the whatif — "0.0067 Shares" —
+# and the live fill — 0.0063). A DERIVED share count is floored to that precision so it can
+# never over-state what we hold: an exit sized from an over-stated fill would try to sell more
+# than the position (the naked-short direction). Under-stating is merely conservative.
+_SHARE_PRECISION = Decimal("0.0001")
+
+_ESTIMATE_NOTE = (
+    "filled_quantity is an ESTIMATE (filled_cash / avg_price): this cash-quantity order is "
+    "only PARTIALLY filled and IBKR reports its fill in USD, not shares. Do not size an exit "
+    "from it — read `positions` for the exact share count."
+)
+_UNKNOWN_SHARES_NOTE = (
+    "filled_quantity is UNKNOWN: this cash-quantity order is only PARTIALLY filled, IBKR "
+    "reports its fill in USD (filled_cash), and no average price was given to derive shares "
+    "from. Read `positions` for the share count."
+)
+
+
+def _fill_units(
+    *,
+    cum_fill: Decimal | None,
+    total_shares: Decimal | None,
+    total_cash: Decimal | None,
+    is_cash_order: bool,
+    avg_price: Decimal | None,
+    status: OrderStatus,
+) -> tuple[Decimal | None, Decimal | None, bool]:
+    """Translate a CPAPI fill into ``(shares, cash, quantity_is_estimate)``.
+
+    A share-sized order passes through untouched. A cash-sized order has its ``cum_fill``
+    read as DOLLARS, and the share count recovered:
+
+    * **fully filled** → ``total_size`` IS the executed share count (verified live: it matched
+      the resulting position exactly). Exact.
+    * **partially filled** → the executed share count is NOT in the payload (``total_size`` is
+      the order's size, not what executed). We derive ``filled_cash / avg_price``, floor it to
+      IBKR's fractional precision, and flag it as an estimate — never pass a derived number off
+      as exact. With no usable average price it stays ``None``: unknown beats invented.
+    """
+    if not is_cash_order:
+        return cum_fill, None, False
+
+    filled_cash = cum_fill
+    if filled_cash is None:
+        return None, None, False
+    if filled_cash <= 0:
+        return Decimal(0), filled_cash, False
+
+    fully_filled = status is OrderStatus.FILLED or (
+        total_cash is not None and total_cash > 0 and filled_cash >= total_cash
+    )
+    if fully_filled and total_shares is not None and total_shares > 0:
+        return total_shares, filled_cash, False
+
+    if avg_price is not None and avg_price > 0:
+        estimate = (filled_cash / avg_price).quantize(_SHARE_PRECISION, rounding=ROUND_DOWN)
+        if estimate > 0:
+            return estimate, filled_cash, True
+    return None, filled_cash, True
+
+
+def _positive(value: Decimal | None) -> bool:
+    return value is not None and value > 0
+
+
+def _annotate(message: object, shares: Decimal | None, is_estimate: bool) -> str | None:
+    """Spell the caveat out in `message` too — an LLM caller reads prose, not just flags."""
+    text = str(message) if message not in (None, "") else None
+    if not is_estimate:
+        return text
+    note = _ESTIMATE_NOTE if shares is not None else _UNKNOWN_SHARES_NOTE
+    return f"{text}: {note}" if text else note
+
+
 def _live_order_to_result(order: dict) -> OrderResult:
+    status = _map_status(order.get("status"))
+    total_cash = _dec(order.get("totalCashSize"))
+    # `cashQty` is the REMAINING cash on a live cash order (0.0 once filled) — usable as a
+    # marker that the order is cash-sized, but never as its total.
+    is_cash_order = _positive(total_cash) or _positive(_dec(order.get("cashQty")))
+    avg_price = _dec(order.get("avgPrice") or order.get("average_price"))
+    shares, cash, is_estimate = _fill_units(
+        cum_fill=_dec(order.get("filledQuantity")),
+        total_shares=_dec(order.get("totalSize")),
+        total_cash=total_cash,
+        is_cash_order=is_cash_order,
+        avg_price=avg_price,
+        status=status,
+    )
     return OrderResult(
         order_id=str(order.get("orderId", "")),
-        status=_map_status(order.get("status")),
+        status=status,
         symbol=str(order.get("ticker", "")),
         side=_to_side(order.get("side")),
-        filled_quantity=_dec(order.get("filledQuantity")),
-        message=order.get("orderDesc"),
+        filled_quantity=shares,
+        filled_cash=cash,
+        is_cash_quantity=is_cash_order,
+        quantity_is_estimate=is_estimate,
+        avg_price=avg_price,
+        message=_annotate(order.get("orderDesc"), shares, is_estimate),
         raw=order,
     )
 
@@ -468,14 +582,32 @@ def _parse_bracket_acks(
 def _order_status_to_result(response: object, order_id: str) -> OrderResult:
     """Parse ``/iserver/account/order/status/{id}`` defensively; ``raw`` carries it all."""
     data = response if isinstance(response, dict) else {}
+    status = _map_status(data.get("order_status") or data.get("status"))
+    total_cash = _dec(data.get("total_cash_quantity"))
+    # `cash_quantity` is the REMAINING cash (0.0 on a filled order) — a marker, not the total.
+    is_cash_order = _positive(total_cash) or _positive(_dec(data.get("cash_quantity")))
+    avg_price = _dec(data.get("average_price") or data.get("avg_price"))
+    shares, cash, is_estimate = _fill_units(
+        cum_fill=_dec(data.get("cum_fill") or data.get("filled_quantity")),
+        total_shares=_dec(data.get("total_size")),
+        total_cash=total_cash,
+        is_cash_order=is_cash_order,
+        avg_price=avg_price,
+        status=status,
+    )
     return OrderResult(
         order_id=str(data.get("order_id") or order_id),
-        status=_map_status(data.get("order_status") or data.get("status")),
+        status=status,
         symbol=str(data.get("ticker") or data.get("symbol") or ""),
         side=_to_side(data.get("side")),
-        filled_quantity=_dec(data.get("cum_fill") or data.get("filled_quantity")),
-        avg_price=_dec(data.get("average_price") or data.get("avg_price")),
-        message=data.get("order_status") or data.get("status"),
+        filled_quantity=shares,
+        filled_cash=cash,
+        is_cash_quantity=is_cash_order,
+        quantity_is_estimate=is_estimate,
+        avg_price=avg_price,
+        message=_annotate(
+            data.get("order_status") or data.get("status"), shares, is_estimate
+        ),
         raw=data or None,
     )
 

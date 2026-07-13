@@ -28,9 +28,15 @@ def _resolution_status(order: object) -> str:
     order with any positive fill resolves as ``filled`` and keeps counting — the fail-safe,
     over-block direction, mirroring ADR-015 ("when money may have moved, count it"). A genuinely
     zero-fill cancel/reject keeps its real status and correctly frees the budget.
+
+    ``filled_cash`` counts as evidence too, and must: on a PARTIALLY filled cash-quantity order
+    IBKR reports the fill only in dollars, so ``filled_quantity`` can be an estimate — or None,
+    when no share count is derivable (ADR-017). Keying solely on the share count would then read
+    "no fill" on an order that really did spend money, and free the budget for it.
     """
     filled = getattr(order, "filled_quantity", None)
-    if filled is not None and filled > 0:
+    cash = getattr(order, "filled_cash", None)
+    if (filled is not None and filled > 0) or (cash is not None and cash > 0):
         return OrderStatus.FILLED.value
     return order.status.value
 

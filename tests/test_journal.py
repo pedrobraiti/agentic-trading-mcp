@@ -378,6 +378,28 @@ async def test_reconcile_partial_fill_under_cancel_does_not_free_budget(tmp_path
     assert journal.spent_today() == Decimal("10")  # budget NOT freed (real spend occurred)
 
 
+async def test_reconcile_counts_a_cash_only_fill_as_money_moved(tmp_path):
+    # A PARTIAL fill of a cash-quantity order: IBKR reports it in dollars, so the share count
+    # can be unknown (ADR-017). Money still moved — keying only on filled_quantity would read
+    # "no fill" and wrongly FREE the daily budget for real spend (the over-spend direction).
+    from trading_core.reconcile import reconcile_pending
+
+    journal = TradeJournal(tmp_path / "t.jsonl")
+    _orphan(journal)
+    assert journal.spent_today() == Decimal("10")
+
+    class _CashFillBroker:
+        async def get_live_orders(self):
+            return [OrderResult(order_id="902", status=OrderStatus.CANCELLED, symbol="AAPL",
+                                side=OrderSide.BUY, filled_quantity=None,
+                                filled_cash=Decimal("4"), is_cash_quantity=True,
+                                raw={"order_ref": "coid-1"})]
+
+    report = await reconcile_pending(_CashFillBroker(), journal)
+    assert report["resolved"][0]["status"] == "filled"
+    assert journal.spent_today() == Decimal("10")  # NOT freed — US$4 really was spent
+
+
 async def test_reconcile_zero_fill_cancel_frees_budget(tmp_path):
     from trading_core.reconcile import reconcile_pending
 

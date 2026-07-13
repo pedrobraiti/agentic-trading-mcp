@@ -176,6 +176,39 @@ async def test_order_status_tool(monkeypatch):
     assert status["data"]["filled_quantity"] == "0.5"
 
 
+async def test_order_status_tool_surfaces_cash_fill_fields(monkeypatch):
+    # A cash_amount buy: the tool must hand the agent the SHARE count in `filled_quantity`
+    # and the US$ in `filled_cash` — the whole point of the ADR-017 fix, all the way out to MCP.
+    class _CashFillInner(_FakeInner):
+        async def get_order_status(self, order_id: str) -> OrderResult:
+            return OrderResult(
+                order_id=order_id, status=OrderStatus.FILLED, symbol="AAPL",
+                side=OrderSide.BUY, filled_quantity=Decimal("0.0063"),
+                filled_cash=Decimal("2"), is_cash_quantity=True, avg_price=Decimal("317.25"),
+            )
+
+    svc = Services(
+        settings=Settings(ibkr_account_id="DU1"), client=None, auth=_FakeAuth(),
+        market_data=_FakeMarketData(),
+        broker=GuardedBroker(
+            _CashFillInner(), _FakeMarketData(), mode=TradingMode.PAPER, allow_live=False,
+            dry_run=True, max_order_value=Decimal("1000"), require_market_open=False,
+        ),
+        journal=TradeJournal("logs/unused.jsonl"),
+    )
+    monkeypatch.setattr(app, "_services", svc)
+
+    data = (await app.order_status("x"))["data"]
+    assert data["filled_quantity"] == "0.0063"  # shares
+    assert data["filled_cash"] == "2"  # dollars
+    assert data["is_cash_quantity"] is True
+    assert data["quantity_is_estimate"] is False
+
+    waited = (await app.wait_for_fill("x", timeout_seconds=1))["data"]
+    assert waited["filled_quantity"] == "0.0063"
+    assert waited["filled_cash"] == "2"
+
+
 async def test_limit_buy_builds_limit_order(tmp_path, monkeypatch):
     inner = _FakeInner()
     market_data = _FakeMarketData()

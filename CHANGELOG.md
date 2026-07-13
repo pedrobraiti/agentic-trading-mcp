@@ -5,6 +5,44 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+A real-money bug, found by an actual US$2 fill on a LIVE account — not by a test. IBKR reports a
+**cash-quantity** order's fill in **dollars**, in the same field it uses for **shares**. Valet was
+passing it through. See ADR-017.
+
+### Fixed
+- **`filled_quantity` reported DOLLARS for a `cash_amount` order — a ~317x oversell waiting to
+  happen.** `buy("AAPL", cash_amount=2)` filled **0.0063 shares @ 317.25** and came back with
+  `filled_quantity: 2.0` (the *dollars*), because the CPAPI puts a cashQty order's `cum_fill` /
+  `filledQuantity` in the quote currency — the same field that carries shares on a share-sized
+  order, with no flag. A caller sizing a protective stop from it (the Vizier skill does exactly
+  that) would have placed a **SELL STOP for 2 shares against a 0.0063-share position** — a naked
+  short — and recorded a bogus position size. Both mappers (`order_status` and `open_orders`) now
+  translate: `filled_quantity` is **always shares/base units, never cash**, on both venues.
+- **`open_orders` silently dropped `avgPrice`.** The live-order mapper never set `avg_price`, so
+  it came back null even though IBKR sent `"317.25"`. Mapped.
+- **A partial cash fill can no longer free daily budget it actually spent.** `reconcile_pending`
+  asked "did money move?" via `filled_quantity > 0`; a partial cash fill can now legitimately have
+  no known share count, so it also honors `filled_cash > 0` (never free real spend — ADR-015/016).
+
+### Added
+- **`OrderResult.filled_cash`** (cash actually spent/collected; `None` when the venue doesn't
+  report it) and **`is_cash_quantity`** (the order was sized in cash), surfaced through every MCP
+  tool that returns an order (`buy`, `sell`, `order_status`, `wait_for_fill`, `open_orders`,
+  `close_position`, `cancel_order`, `stop_order`, `trailing_stop`, `bracket_order`).
+- **`OrderResult.quantity_is_estimate`** — honesty about the one case the venue does not report:
+  a **partial** fill of a cash order carries no executed share count in the payload (`total_size`
+  is the *order's* size). We derive `filled_cash / avg_price`, floor it to IBKR's 4-dp fractional
+  precision (an over-stated fill would size an exit into a short; under-stating is merely
+  conservative), and flag it — with the caveat in `message` too. No usable price → `null`, never
+  an invented number. The exact count is always in `positions`.
+
+### Changed
+- **The fixtures now mirror the REAL payloads.** The IBKR fixtures reported cash orders in
+  *shares* — which is why 206 green tests never caught this. They now carry the exact live
+  payloads (`cum_fill`/`filledQuantity` in dollars **plus** `totalSize` in shares), and the crypto
+  fake reports CCXT's `cost` alongside `filled`. Same lesson as 0.7.0's binance fake: a fake that
+  is kinder than the venue is a liar.
+
 ## [0.7.0] - 2026-07-11
 
 Review round on the crypto execution path: one severe latent break on the default exchange,

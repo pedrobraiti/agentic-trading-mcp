@@ -71,7 +71,10 @@ class FakeExchange:
         self.created_params.append(params or {})
         return {
             "id": "o1", "symbol": symbol, "side": side, "status": "closed",
+            # CCXT always normalizes `filled` to BASE units and reports the quote spent in
+            # `cost` — unlike IBKR, whose cash orders report the fill in dollars (ADR-017).
             "filled": amount, "average": self._last, "amount": amount, "price": price,
+            "cost": amount * self._last,
         }
 
     async def create_market_buy_order_with_cost(self, symbol, cost, params=None):
@@ -132,6 +135,13 @@ async def test_buy_by_cost_uses_native_with_cost():
     assert ex.cost_orders == [("BTC/USDT", 50.0)]
     assert ex.created == []  # native path, not the fallback create_order
     assert result.status is OrderStatus.FILLED
+    # Same unit contract as IBKR (ADR-017): quantity in BASE units, cash in the quote ccy.
+    # CCXT already reports `filled` in base, so there is nothing to undo here — but the
+    # contract is asserted on BOTH venues so it can't silently rot on either.
+    assert result.filled_quantity == Decimal("0.5")  # 50 USDT / 100 = 0.5 BTC
+    assert result.filled_cash == Decimal("50")
+    assert result.is_cash_quantity is True
+    assert result.quantity_is_estimate is False
 
 
 async def test_buy_by_cost_falls_back_without_native_support():

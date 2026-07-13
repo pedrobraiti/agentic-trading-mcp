@@ -383,6 +383,7 @@ async def test_order_post_503_not_resent_when_already_landed():
 async def test_get_order_status_parses_fill():
     # Field shape captured live from /iserver/account/order/status/{id}:
     # `symbol` (not ticker), `side` as "B"/"S", `cum_fill`, `order_status`.
+    # A SHARE-sized order: no cash fields, so `cum_fill` is already in shares.
     respx.get(f"{BASE}/iserver/account/order/status/123").mock(
         return_value=httpx.Response(
             200,
@@ -404,6 +405,162 @@ async def test_get_order_status_parses_fill():
     assert result.side is OrderSide.BUY
     assert result.filled_quantity == Decimal("0.0066")
     assert result.avg_price == Decimal("298.96")
+    assert result.is_cash_quantity is False
+    assert result.filled_cash is None  # a share order reports no cash size
+    assert result.quantity_is_estimate is False
+    await client.aclose()
+
+
+# The EXACT payload IBKR returned for a live US$2 cash-quantity BUY of AAPL that filled
+# 0.0063 shares @ 317.25 (order_status path). Note `cum_fill` = 2.0 = DOLLARS, while the
+# real share count hides in `total_size`. This fixture is the bug: any mapper that reads
+# `cum_fill` as shares reports 2 shares for a 0.0063-share position (317x).
+_LIVE_CASH_FILL_STATUS = {
+    "order_id": 456, "order_status": "Filled", "symbol": "AAPL", "side": "B",
+    "size": "0.0", "total_size": "0.0063",
+    "cash_quantity": "0.0", "total_cash_quantity": "2.0",
+    "cum_fill": "2.0", "size_and_fills": "2 USD", "average_price": "317.25",
+    "order_description": "Bought 0.0063 AAPL Market, Day", "order_type": "MARKET",
+}
+
+
+@respx.mock
+async def test_cash_order_status_reports_shares_not_dollars():
+    # THE REAL-MONEY BUG: IBKR reports a cashQty order's cum_fill in DOLLARS, in the same
+    # field that carries SHARES on a share-sized order. filled_quantity must be SHARES —
+    # a caller sizing a stop from 2.0 against a 0.0063-share position would go naked short.
+    respx.get(f"{BASE}/iserver/account/order/status/456").mock(
+        return_value=httpx.Response(200, json=_LIVE_CASH_FILL_STATUS)
+    )
+    client = CpapiClient(BASE)
+    broker = CpapiBroker(client, ACCT, _resolver)
+
+    result = await broker.get_order_status("456")
+
+    assert result.filled_quantity == Decimal("0.0063")  # SHARES (total_size), never 2.0
+    assert result.filled_cash == Decimal("2.0")  # the US$ actually spent
+    assert result.is_cash_quantity is True
+    assert result.quantity_is_estimate is False  # fully filled → total_size is exact
+    assert result.avg_price == Decimal("317.25")
+    await client.aclose()
+
+
+@respx.mock
+async def test_partial_cash_fill_flags_an_estimated_share_count():
+    # A PARTIAL cash fill: `total_size` is the ORDER's size, not what executed, so the exact
+    # executed share count is NOT in the payload. We derive it from filled_cash / avg_price
+    # and flag it — never present a derived number as exact.
+    respx.get(f"{BASE}/iserver/account/order/status/457").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                **_LIVE_CASH_FILL_STATUS, "order_id": 457, "order_status": "Submitted",
+                "cum_fill": "1.0", "cash_quantity": "1.0", "size": "0.0031",
+            },
+        )
+    )
+    client = CpapiClient(BASE)
+    broker = CpapiBroker(client, ACCT, _resolver)
+
+    result = await broker.get_order_status("457")
+
+    # 1.0 USD / 317.25 = 0.003152... → floored to IBKR's 4-dp share precision (never over-state).
+    assert result.filled_quantity == Decimal("0.0031")
+    assert result.quantity_is_estimate is True
+    assert result.filled_cash == Decimal("1.0")
+    assert "ESTIMATE" in (result.message or "")
+    await client.aclose()
+
+
+@respx.mock
+async def test_partial_cash_fill_without_price_reports_unknown_shares():
+    # No average price → the share count is NOT derivable. Report None (and the cash),
+    # never a number a caller could mistake for a share count.
+    respx.get(f"{BASE}/iserver/account/order/status/458").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                **_LIVE_CASH_FILL_STATUS, "order_id": 458, "order_status": "Submitted",
+                "cum_fill": "1.0", "average_price": "",
+            },
+        )
+    )
+    client = CpapiClient(BASE)
+    broker = CpapiBroker(client, ACCT, _resolver)
+
+    result = await broker.get_order_status("458")
+
+    assert result.filled_quantity is None
+    assert result.filled_cash == Decimal("1.0")
+    assert result.quantity_is_estimate is True
+    assert "UNKNOWN" in (result.message or "")
+    await client.aclose()
+
+
+@respx.mock
+async def test_open_orders_cash_order_reports_shares_and_avg_price():
+    # The EXACT payload from /iserver/account/orders for the same live US$2 fill.
+    # Two bugs at once: `filledQuantity` is DOLLARS (must map to shares), and `avgPrice`
+    # was being dropped entirely (avg_price came back null though IBKR sent "317.25").
+    respx.get(f"{BASE}/iserver/account/orders").mock(
+        return_value=httpx.Response(200, json={"orders": [{
+            "orderId": 456, "ticker": "AAPL", "side": "BUY", "status": "Filled",
+            "cashQty": 0.0, "cashCcy": "USD", "sizeAndFills": "2 USD",
+            "orderDesc": "Bought 0.0063 AAPL Market, Day",
+            "remainingQuantity": 0.0, "filledQuantity": 2.0,
+            "totalSize": 0.0063, "totalCashSize": 2.0, "avgPrice": "317.25",
+        }]})
+    )
+    client = CpapiClient(BASE)
+    broker = CpapiBroker(client, ACCT, _resolver)
+
+    orders = await broker.get_live_orders()
+
+    assert orders[0].filled_quantity == Decimal("0.0063")  # SHARES, not 2.0 dollars
+    assert orders[0].filled_cash == Decimal("2.0")
+    assert orders[0].is_cash_quantity is True
+    assert orders[0].avg_price == Decimal("317.25")  # was silently dropped
+    await client.aclose()
+
+
+@respx.mock
+async def test_open_orders_share_order_passes_quantity_through():
+    respx.get(f"{BASE}/iserver/account/orders").mock(
+        return_value=httpx.Response(200, json={"orders": [{
+            "orderId": 60, "ticker": "AAPL", "side": "BUY", "status": "Submitted",
+            "filledQuantity": 3.0, "remainingQuantity": 2.0, "totalSize": 5.0,
+            "avgPrice": "180.10",
+        }]})
+    )
+    client = CpapiClient(BASE)
+    broker = CpapiBroker(client, ACCT, _resolver)
+
+    orders = await broker.get_live_orders()
+
+    assert orders[0].filled_quantity == Decimal("3.0")  # already shares — untouched
+    assert orders[0].filled_cash is None
+    assert orders[0].is_cash_quantity is False
+    assert orders[0].avg_price == Decimal("180.10")
+    await client.aclose()
+
+
+@respx.mock
+async def test_cash_buy_ack_is_flagged_as_a_cash_quantity_order():
+    respx.post(f"{BASE}/iserver/account/{ACCT}/orders").mock(
+        return_value=httpx.Response(200, json=[{"order_id": "5", "order_status": "Submitted"}])
+    )
+    client = CpapiClient(BASE)
+    broker = CpapiBroker(client, ACCT, _resolver)
+
+    cash = await broker.place_order(
+        OrderRequest(symbol="AAPL", side=OrderSide.BUY, cash_qty=Decimal("2"))
+    )
+    shares = await broker.place_order(
+        OrderRequest(symbol="AAPL", side=OrderSide.BUY, quantity=Decimal("1"))
+    )
+
+    assert cash.is_cash_quantity is True
+    assert shares.is_cash_quantity is False
     await client.aclose()
 
 

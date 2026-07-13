@@ -89,7 +89,12 @@ class CcxtBroker:
                 float(price) if price is not None else None,
                 params,
             )
-        return self._to_result(order, fallback_symbol=symbol, fallback_side=request.side)
+        return self._to_result(
+            order,
+            fallback_symbol=symbol,
+            fallback_side=request.side,
+            is_cash_quantity=request.cash_qty is not None,
+        )
 
     async def _place_stop(
         self, symbol: str, side: str, request: OrderRequest, params: dict
@@ -226,7 +231,17 @@ class CcxtBroker:
         *,
         fallback_symbol: str | None,
         fallback_side: OrderSide | None,
+        is_cash_quantity: bool = False,
     ) -> OrderResult:
+        """Map a CCXT order to the domain result.
+
+        Unlike IBKR's CPAPI (ADR-017), CCXT normalizes ``filled`` to BASE units on every order
+        — including a buy-by-value — so there is no dollars-vs-shares ambiguity to undo here;
+        ``cost`` is the quote-currency counterpart. ``is_cash_quantity`` is therefore only
+        known when WE placed the order (the request said so); a re-fetch of someone else's
+        order cannot recover it, and does not need to: the unit of ``filled_quantity`` never
+        changes on this venue.
+        """
         order_id = order.get("id")
         symbol = order.get("symbol") or fallback_symbol or ""
         if order_id and order.get("symbol"):
@@ -244,6 +259,8 @@ class CcxtBroker:
             symbol=symbol,
             side=side,
             filled_quantity=to_decimal(order.get("filled")),
+            filled_cash=to_decimal(order.get("cost")),
+            is_cash_quantity=is_cash_quantity,
             avg_price=to_decimal(order.get("average") or order.get("price")),
             message=order.get("status"),
             raw=order,
