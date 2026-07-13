@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.8.0] - 2026-07-13
 
 A real-money bug, found by an actual US$2 fill on a LIVE account — not by a test. IBKR reports a
 **cash-quantity** order's fill in **dollars**, in the same field it uses for **shares**. Valet was
